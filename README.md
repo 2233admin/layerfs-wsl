@@ -14,6 +14,8 @@ commit, merge and publish through the LayerFS JS SDK, which runs in a WSL distro
 - `extension/index.ts`: the OMP extension. Tools `layerfs` (an `lfs.js` command) and
   `layerfs_script` (a Node ES module run against the SDK), the command `/layerfs`, the
   project line in each agent's context and per-call records in each session.
+- `ui/`: the LayerFS page (DSH's Work/History view) of one project, served from its client
+  container; see [The LayerFS page](#the-layerfs-page).
 
 ## Install
 
@@ -23,10 +25,11 @@ Prerequisites in the distro (default `layerfs-lab`): Docker, the LayerFS checkou
 (e.g. `bench-rust-sandbox:3`). `OMP_LFS_BUNDLE`, `OMP_LFS_CHECKOUT`, `OMP_LFS_ROOT`
 and `OMP_LFS_RUNTIME_IMAGE` override those paths.
 
-Install the bridge (from this folder, PowerShell):
+Install the bridge and the page (from this folder, PowerShell):
 
 ```powershell
 wsl -d layerfs-lab -- bash -c "mkdir -p /opt/omp-layerfs && tr -d '\r' < bridge/lfs-bridge.sh > /opt/omp-layerfs/lfs-bridge.sh && chmod 755 /opt/omp-layerfs/lfs-bridge.sh"
+wsl -d layerfs-lab -- bash -c "mkdir -p /root/omp-layerfs/ui && cp ui/server.mjs ui/page.js ui/index.html /root/omp-layerfs/ui/"
 ```
 
 Load the extension for one project only, either per run:
@@ -108,6 +111,34 @@ cmd /c "omp -p --mode json -e ..\extension\index.ts ""/layerfs log 60"" < NUL > 
 cmd /c "omp -p --mode json -e ..\extension\index.ts ""/layerfs agents"" < NUL > cmd-agents.jsonl"
 ```
 
+### The LayerFS page
+
+`/layerfs ui [port]` starts the bound project's LayerFS page and prints its address,
+`http://localhost:8787` by default; `/layerfs ui stop` stops it. Without OMP:
+`wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh ui hello [port]` and `... ui-stop hello`.
+The page is DSH's own LayerFS view (`dsh/packages/view`, `dsh/packages/model`, served
+unbuilt from the checkout) with its Work | History switch: Work has the Branches with
+the agents on them, the Store's storage and the project terminal of the calls; History
+has the project's tree of Branches, Commits and Layers, the Files at a picked point and
+Storage. `?pane=work` or `?pane=history` opens that side.
+
+- Every OMP session with a trace file on the project is one agent, named by the last
+  characters of its session id (as `/layerfs log` shows them), so the page shows each
+  `task` subagent apart. No session is the lead: the view's lead (`main`) stays unassigned.
+- History comes from the Store; the agents' calls are replayed on top of it, as DSH's
+  LayerFS tab does, and new calls appear about two seconds after they end (the page
+  polls every 1.5 s). Workspaces show while a call has them mounted.
+- `ui/server.mjs` runs in the client container (`node`, host network, bound to
+  127.0.0.1, which WSL forwards to Windows' localhost; requests with another `Host` are
+  refused). It serves DSH's `/layerfs` routes with DSH's own handler (`host/src/route.js`)
+  over DSH's trace `Collector` and `TreeReader`; it stands in only for what DSH's runtime
+  gives them: the project binding, the SDK client (from the container's `LAYERFS_*`
+  environment) and DSH's session records (none here). Its log is `/tmp/omp-lfs-ui.log`
+  in the client container. One page per project; give two projects different ports.
+- The page's own glue (`ui/page.js`) is the DSH client plugin's TypeScript (`replay.ts`,
+  `playback.ts`, `storage.ts`, `LayerFsView.tsx`'s board) in plain JS without React.
+  The DSH plugin's Setup, Init, project removal and Sandboxes tab are not part of it.
+
 ## Security
 
 - `layerfs_script` runs model-written JavaScript with Node in the project's client
@@ -116,6 +147,10 @@ cmd /c "omp -p --mode json -e ..\extension\index.ts ""/layerfs agents"" < NUL > 
   a `layerfs_script` call like a shell command in the distro.
 - Both tools use OMP's default `exec` approval tier, so they ask for approval like `bash`
   unless the approval mode is `yolo`. `bash.patterns` allow/deny rules do not apply to them.
+- The LayerFS page has no sign-in: anything that reaches `localhost:<port>` (in the distro
+  or on Windows) can read the project's History, Files and Store figures. It answers only
+  reads with a localhost `Host`; DSH's writes on the same routes (Init, removal, Sandbox
+  actions) are refused.
 
 ## Type check
 

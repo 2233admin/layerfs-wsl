@@ -15,6 +15,8 @@
 #   lfs-bridge.sh cli    <project> <trace-id> -- <lfs.js args...>   (stdin passed through)
 #   lfs-bridge.sh script <project> <trace-id> <script-path>          (under $OMP_LFS_ROOT/scripts)
 #   lfs-bridge.sh down   <project>
+#   lfs-bridge.sh ui     <project> [port]      (the LayerFS page, default port 8787)
+#   lfs-bridge.sh ui-stop <project>
 #
 # env: LFS_TRACE_STEP labels this call's SDK trace lines (DSH_LAYERFS_TRACE_STEP).
 set -euo pipefail
@@ -29,7 +31,7 @@ CLI=$LAYERFS/dsh/packages/host/src/lfs.js
 SKILL=$LAYERFS/.agents/skills/layerfs-js-sdk/SKILL.md
 
 die() { echo "lfs-bridge: $*" >&2; exit 64; }
-usage() { sed -n '12,18p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
+usage() { sed -n '12,20p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
 
 check_project() {
   [[ $1 =~ ^[a-z0-9]([a-z0-9_.-]{0,61}[a-z0-9])?$ ]] || die "bad project name '$1' (a-z 0-9 _ - ., 1-63 chars, letter/digit at both ends)"
@@ -152,6 +154,58 @@ cmd_down() {
   echo "client $name stopped (Store volume $name-store kept)"
 }
 
+# The page's server (ui/server.mjs, installed under $ROOT/ui) runs detached in
+# the client; its pid, port and log are in the client's /tmp.
+UI_PID=/tmp/omp-lfs-ui.pid UI_PORT=/tmp/omp-lfs-ui.port UI_LOG=/tmp/omp-lfs-ui.log
+# The pid of the client's running page server, if any.
+ui_pid() {
+  docker exec "$1" sh -c "p=\$(cat $UI_PID 2>/dev/null) && grep -q server.mjs /proc/\$p/cmdline 2>/dev/null && echo \$p" || true
+}
+
+# ui <project> [port]: the project's LayerFS page, started when it is not
+# running on that port (one page per client; another port restarts it).
+cmd_ui() {
+  [ $# -ge 1 ] && [ $# -le 2 ] || usage
+  local project=$1 port=${2:-8787} name pid
+  check_project "$project"
+  [[ $port =~ ^[0-9]{1,5}$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "bad port '$port'"
+  [ -f "$ROOT/ui/server.mjs" ] || die "$ROOT/ui/server.mjs is not installed (see README: Install)"
+  name=$(running_client "$project")
+  pid=$(ui_pid "$name")
+  if [ -n "$pid" ]; then
+    if [ "$(docker exec "$name" cat $UI_PORT 2>/dev/null)" = "$port" ]; then
+      echo "LayerFS page of $project already running: http://localhost:$port"
+      return
+    fi
+    cmd_ui_stop "$project" >/dev/null
+  fi
+  docker exec -d -w "$BUNDLE" "$name" sh -c "echo \$\$ > $UI_PID; echo $port > $UI_PORT; exec node $ROOT/ui/server.mjs $project $port > $UI_LOG 2>&1"
+  local i
+  for i in $(seq 50); do
+    sleep 0.2
+    if docker exec "$name" grep -q '^LayerFS page' $UI_LOG 2>/dev/null; then
+      echo "LayerFS page of $project: http://localhost:$port"
+      return
+    fi
+    [ -n "$(ui_pid "$name")" ] || [ "$i" -lt 3 ] || break
+  done
+  docker exec "$name" tail -n 20 $UI_LOG >&2 || true
+  die "the LayerFS page of $project did not start"
+}
+
+cmd_ui_stop() {
+  [ $# -eq 1 ] || usage
+  check_project "$1"
+  local name pid
+  name=$(client "$1")
+  pid=
+  if [ "$(docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null)" = true ]; then pid=$(ui_pid "$name"); fi
+  if [ -z "$pid" ]; then echo "no LayerFS page of $1 running"; return; fi
+  # SIGTERM, then SIGKILL after 5 s: the port is free when this returns
+  docker exec "$name" sh -c "kill $pid; i=0; while kill -0 $pid 2>/dev/null && [ \$i -lt 25 ]; do sleep 0.2; i=\$((i+1)); done; kill -9 $pid 2>/dev/null; rm -f $UI_PID $UI_PORT"
+  echo "LayerFS page of $1 stopped"
+}
+
 [ $# -ge 1 ] || usage
 sub=$1; shift
 case $sub in
@@ -160,5 +214,6 @@ case $sub in
   cli) cmd_cli "$@" ;;
   script) cmd_script "$@" ;;
   down) cmd_down "$@" ;;
-  *) usage ;;
+  ui) cmd_ui "$@" ;;
+  ui-stop) cmd_ui_stop "$@" ;;
 esac

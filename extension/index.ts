@@ -533,11 +533,11 @@ export default function layerfs(pi: ExtensionAPI) {
 		},
 	});
 
-	const USAGE = "usage: /layerfs init <project> <image> <linux-src-dir> | status | down | log [n] | agents";
+	const USAGE = "usage: /layerfs init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop";
 
 	pi.registerCommand("layerfs", {
 		description:
-			"LayerFS project of this folder: init <project> <image> <linux-src-dir> | status | down | log [n] | agents",
+			"LayerFS project of this folder: init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop",
 		handler: async (args, ctx) => {
 			const [sub, ...rest] = String(args ?? "").trim().split(/\s+/).filter(Boolean);
 			const show = (text: string, ok: boolean) => {
@@ -586,6 +586,13 @@ export default function layerfs(pi: ExtensionAPI) {
 					if (rest.length) throw new Error("usage: /layerfs agents");
 					const b = readBinding(ctx.cwd);
 					show(agentsReport(b.project, await projectCalls(b)), true);
+				} else if (sub === "ui") {
+					// the project's LayerFS page (ui/server.mjs in its client container), at http://localhost:<port>
+					if (rest.length > 1 || (rest[0] !== undefined && rest[0] !== "stop" && !/^\d{1,5}$/.test(rest[0])))
+						throw new Error("usage: /layerfs ui [port] | ui stop");
+					const b = readBinding(ctx.cwd);
+					const r = await bridge(b.distro, rest[0] === "stop" ? ["ui-stop", b.project] : ["ui", b.project, ...rest]);
+					show(format(r), r.code === 0);
 				} else {
 					throw new Error(USAGE);
 				}

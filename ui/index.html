@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LayerFS</title>
+  <style>
+    html, body { margin: 0; height: 100%; }
+    #lfs { height: 100vh; position: relative; }
+    #message { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 14px system-ui, sans-serif; color: #667; z-index: 1; pointer-events: none; }
+    #message[hidden] { display: none; }
+  </style>
+  <!-- the simulator's file helpers the view draws Files with (UMD: LayerSim, LayerFiles) -->
+  <script src="/dsh/sim/simulation_engine/model.js"></script>
+  <script src="/dsh/sim/simulation_engine/files.js"></script>
+  <script type="module" src="/page.js"></script>
+</head>
+<body>
+  <div id="lfs"></div>
+  <div id="message">Loading LayerFS…</div>
+</body>
+</html>
