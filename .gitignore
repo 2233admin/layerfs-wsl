@@ -1,0 +1,4 @@
+# e2e run outputs (event streams, logs) and scratch folders
+e2e/*.jsonl
+e2e/*.txt
+e2e/cmdtest/
