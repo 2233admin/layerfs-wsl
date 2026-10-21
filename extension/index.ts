@@ -3,22 +3,30 @@
 //
 // The folder's binding is <cwd>/.omp/layerfs.json:
 //   { "distro": "layerfs-lab", "project": "hello", "image": "bench-rust-sandbox:3" }
-// Every call runs the bridge with the calling session's id as its trace id, so
-// each agent (a task subagent has its own session) gets its own SDK trace file
-// /root/omp-layerfs/traces/<session-id>.jsonl in the distro.
+// Every call runs the bridge with trace id `<project>.<session-id>`, so each
+// agent (a task subagent has its own session) gets its own SDK trace file
+// /root/omp-layerfs/traces/<project>.<session-id>.jsonl in the distro. The SDK's
+// trace lines do not name the project; the file name does.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { type FileHandle, mkdir, open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const BRIDGE = "/opt/omp-layerfs/lfs-bridge.sh";
 const ROOT = "/root/omp-layerfs";
+const TRACES = `${ROOT}/traces`;
 const DEFAULT_DISTRO = "layerfs-lab";
 const SKILL = "/root/layerfs/.agents/skills/layerfs-js-sdk/SKILL.md";
 /** Characters kept per output stream; the rest is cut from the middle. */
 const STREAM_LIMIT = 60_000;
+/** The SDK cuts trace step labels to this many characters (sdk/js/src/trace.js). */
+const STEP_LIMIT = 200;
+/** Custom session entry of one traced LayerFS call. */
+const CALL_ENTRY = "omp-layerfs.call";
+/** Custom session entry recording the project line given to a session. */
+const PROMPT_ENTRY = "omp-layerfs.prompt";
 
 interface Binding {
 	distro: string;
@@ -31,6 +39,31 @@ interface BridgeResult {
 	stdout: string;
 	stderr: string;
 }
+
+/** One parsed SDK trace line. */
+type TraceLine = Record<string, unknown>;
+
+/** A traced LayerFS call, compact: ids and outcome, no arguments or output. */
+interface CallRecord {
+	project: string;
+	id: string;
+	step?: string;
+	method: string;
+	start: string;
+	ms?: number;
+	ok: boolean;
+	kind?: string;
+	code?: string;
+	message?: string;
+	branch?: string;
+	commit?: string;
+	head?: string;
+	layer?: string;
+	exitCode?: number;
+}
+
+/** Workspaces seen mounted, `${sandbox}\n${path}` -> Branch: workspace calls name no Branch themselves. */
+type Mounts = Map<string, string>;
 
 function bindingFile(cwd: string): string {
 	return path.join(cwd, ".omp", "layerfs.json");
@@ -56,9 +89,22 @@ function uncPath(distro: string, linuxPath: string): string {
 	return `\\\\wsl.localhost\\${distro}${linuxPath.replaceAll("/", "\\")}`;
 }
 
-/** The calling session's id, in the bridge's trace-id alphabet. */
-function traceId(ctx: { sessionManager: { getSessionId(): string } }): string {
-	return ctx.sessionManager.getSessionId().replace(/[^A-Za-z0-9._-]/g, "_");
+/**
+ * The trace id of the calling session's calls on `project`: `<project>.<session>`,
+ * in the bridge's trace-id alphabet. The session part has no dots, so the last
+ * dot of a trace file name separates project and session.
+ */
+function traceId(project: string, ctx: { sessionManager: { getSessionId(): string } }): string {
+	return `${project}.${ctx.sessionManager.getSessionId().replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
+
+function traceFile(distro: string, id: string): string {
+	return uncPath(distro, `${TRACES}/${id}.jsonl`);
+}
+
+/** The line DSH puts in each agent's context (dsh/packages/host/src/env.js projectContext). */
+function projectLine(b: Binding): string {
+	return `LayerFS project of this conversation: ${b.project} (live). Every layerfs and layerfs_script call has it as DSH_LAYERFS_PROJECT; work on it through those two tools (the LayerFS CLI and SDK scripts), not the local folder. SDK guide: ${uncPath(b.distro, SKILL)}`;
 }
 
 /**
@@ -120,12 +166,142 @@ function format(r: BridgeResult): string {
 	return parts.join("\n");
 }
 
-/** A tool result; a nonzero exit is a tool error carrying the same text. */
-function toolResult(r: BridgeResult) {
-	const text = format(r);
-	if (r.code !== 0) throw new Error(text);
-	return { content: [{ type: "text" as const, text }], details: { exitCode: r.code } };
+// ---- SDK trace lines -> call records ----------------------------------------
+
+function str(v: unknown): string | undefined {
+	return typeof v === "string" && v ? v : undefined;
 }
+
+/** A complete trace line, or undefined for a torn or foreign one. */
+function parseLine(raw: string): TraceLine | undefined {
+	if (!raw.trim()) return undefined;
+	try {
+		const line = JSON.parse(raw) as unknown;
+		if (line && typeof line === "object" && (line as TraceLine).layerfs_trace === 1) return line as TraceLine;
+	} catch {}
+	return undefined;
+}
+
+/**
+ * The record of a finished call (an `end` line; `start` lines only mark running
+ * calls). Updates `mounts` so later workspace calls name their Branch.
+ */
+function toRecord(line: TraceLine, project: string, mounts: Mounts): CallRecord | undefined {
+	if (line.phase === "start") return undefined;
+	const id = str(line.id);
+	const method = str(line.method);
+	if (!id || !method) return undefined;
+	const args = (line.args && typeof line.args === "object" ? line.args : {}) as TraceLine;
+	const ws = str(args.sandbox) && str(args.path) ? `${args.sandbox}\n${args.path}` : undefined;
+	const branch = str(line.branch) ?? str(args.branch) ?? (ws ? mounts.get(ws) : undefined);
+	if (method === "workspace.mount" && line.ok === true && str(line.sandbox) && str(line.path) && branch) {
+		mounts.set(`${line.sandbox}\n${line.path}`, branch);
+	} else if (method === "workspace.unmount" && ws) mounts.delete(ws);
+	const rec: CallRecord = { project, id, method, start: str(line.start) ?? "", ok: line.ok === true };
+	const step = str(line.step);
+	if (step) rec.step = step;
+	if (typeof line.ms === "number") rec.ms = line.ms;
+	const kind = str(line.kind);
+	if (kind) rec.kind = kind;
+	const code = str(line.code);
+	if (code) rec.code = code;
+	const message = str(line.message);
+	if (message) rec.message = message.length > 300 ? `${message.slice(0, 300)}…` : message;
+	if (branch) rec.branch = branch;
+	for (const key of ["commit", "head", "layer"] as const) {
+		const v = str(line[key]);
+		if (v) rec[key] = v;
+	}
+	if (Number.isInteger(line.exitCode)) rec.exitCode = line.exitCode as number;
+	return rec;
+}
+
+/** How far one trace file has been read, by this process. */
+interface Tail {
+	/** Settles once `offset` holds the file's size before the session's first call here. */
+	ready: Promise<void>;
+	/** Byte offset after the last complete line read. */
+	offset: number;
+	/** Read end lines no call has claimed yet (calls of one session can overlap). */
+	pending: TraceLine[];
+	mounts: Mounts;
+	/** Serializes reads of this file. */
+	lock: Promise<unknown>;
+}
+
+/** Trace id -> tail. Module-wide: every session of this process shares the module. */
+const tails = new Map<string, Tail>();
+
+/** The tail of a trace file; created (offset = current size) before its first call runs. */
+function tailOf(id: string, file: string): Tail {
+	let tail = tails.get(id);
+	if (!tail) {
+		const t: Tail = { ready: Promise.resolve(), offset: 0, pending: [], mounts: new Map(), lock: Promise.resolve() };
+		t.ready = stat(file).then(
+			(s) => {
+				t.offset = s.size;
+			},
+			() => {},
+		);
+		t.lock = t.ready;
+		tails.set(id, t);
+		tail = t;
+	}
+	return tail;
+}
+
+/** Reads the complete lines appended to `file` since the last read into `tail.pending`. */
+function readNew(tail: Tail, file: string): Promise<void> {
+	const run = tail.lock.then(async () => {
+		let fh: FileHandle;
+		try {
+			fh = await open(file, "r");
+		} catch {
+			return;
+		}
+		try {
+			const { size } = await fh.stat();
+			if (size <= tail.offset) return;
+			const buf = Buffer.alloc(size - tail.offset);
+			const { bytesRead } = await fh.read(buf, 0, buf.length, tail.offset);
+			const end = buf.subarray(0, bytesRead).lastIndexOf(0x0a);
+			if (end < 0) return;
+			tail.offset += end + 1;
+			for (const raw of buf.subarray(0, end).toString("utf8").split("\n")) {
+				const line = parseLine(raw);
+				if (line && line.phase !== "start") tail.pending.push(line);
+			}
+		} finally {
+			await fh.close();
+		}
+	});
+	tail.lock = run.catch(() => {});
+	return run;
+}
+
+/** The step label the SDK writes for a tool call id. */
+function stepLabel(toolCallId: string): string {
+	return toolCallId.length > STEP_LIMIT ? `${toolCallId.slice(0, STEP_LIMIT)}…` : toolCallId;
+}
+
+/** Takes this call's finished lines (by step label) out of the tail, as records; drops unlabelled lines (`/layerfs status`). */
+function claim(tail: Tail, project: string, toolCallId: string): CallRecord[] {
+	const step = stepLabel(toolCallId);
+	const out: CallRecord[] = [];
+	const rest: TraceLine[] = [];
+	for (const line of tail.pending) {
+		if (line.step !== step) {
+			if (line.step !== undefined) rest.push(line);
+			continue;
+		}
+		const rec = toRecord(line, project, tail.mounts);
+		if (rec) out.push(rec);
+	}
+	tail.pending = rest;
+	return out;
+}
+
+// ---- tool calls ---------------------------------------------------------------
 
 const LAYERFS_DESCRIPTION = `Run one LayerFS CLI command (DSH's lfs.js) on the LayerFS project bound to this folder (.omp/layerfs.json). The project's files live in LayerFS, not in the local folder.
 \`args\` is the argv, one element per argument (no shell quoting):
@@ -170,36 +346,177 @@ try {
 Full SDK guide (read before non-trivial work): ${uncPath(DEFAULT_DISTRO, SKILL)} and the references/ folder beside it (methods/project.md, branch.md, workspace.md, fs-read.md, fs-write.md). When the binding names another distro, replace "${DEFAULT_DISTRO}" in that path.`;
 }
 
+// ---- /layerfs log, /layerfs agents --------------------------------------------
+
+/** A finished call of some session, from the trace files. */
+interface LoggedCall extends CallRecord {
+	session: string;
+}
+
+/** Every finished call on `b.project` in the distro's trace files, oldest first. */
+async function projectCalls(b: Binding): Promise<LoggedCall[]> {
+	const dir = uncPath(b.distro, TRACES);
+	let names: string[];
+	try {
+		names = await readdir(dir);
+	} catch {
+		return [];
+	}
+	const lines: { session: string; line: TraceLine }[] = [];
+	for (const name of names) {
+		if (!name.endsWith(".jsonl")) continue;
+		const id = name.slice(0, -".jsonl".length);
+		const dot = id.lastIndexOf(".");
+		if (dot < 0 || id.slice(0, dot) !== b.project) continue;
+		const session = id.slice(dot + 1);
+		let text: string;
+		try {
+			text = await readFile(path.join(dir, name), "utf8");
+		} catch {
+			continue;
+		}
+		for (const raw of text.split("\n")) {
+			const line = parseLine(raw);
+			if (line && line.phase !== "start") lines.push({ session, line });
+		}
+	}
+	lines.sort((x, y) => Date.parse(String(x.line.start)) - Date.parse(String(y.line.start)));
+	const mounts = new Map<string, Mounts>();
+	const out: LoggedCall[] = [];
+	for (const { session, line } of lines) {
+		let m = mounts.get(session);
+		if (!m) mounts.set(session, (m = new Map()));
+		const rec = toRecord(line, b.project, m);
+		if (rec) out.push({ ...rec, session });
+	}
+	return out;
+}
+
+function shortSession(s: string): string {
+	return s.length > 13 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s;
+}
+
+function shortTime(iso: string): string {
+	return iso ? `${iso.slice(0, 10)} ${iso.slice(11, 19)}Z` : "?";
+}
+
+function logLine(c: LoggedCall): string {
+	const outcome = c.ok ? `ok${c.kind ? ` ${c.kind}` : ""}` : `FAIL ${c.code ?? c.kind ?? ""}`.trimEnd();
+	const ref = c.commit ?? c.head;
+	return [
+		shortTime(c.start),
+		shortSession(c.session),
+		c.method,
+		outcome,
+		c.branch ?? "-",
+		ref ? ref.slice(0, 12) : "-",
+		c.ms === undefined ? "-" : `${c.ms}ms`,
+	].join("  ");
+}
+
+function agentsReport(project: string, calls: LoggedCall[]): string {
+	const by = new Map<string, { calls: number; branches: Set<string>; first: string; last: string }>();
+	for (const c of calls) {
+		let a = by.get(c.session);
+		if (!a) by.set(c.session, (a = { calls: 0, branches: new Set(), first: c.start, last: c.start }));
+		a.calls++;
+		if (c.branch) a.branches.add(c.branch);
+		a.last = c.start;
+	}
+	if (by.size === 0) return `no traced LayerFS calls on project ${project}`;
+	const rows = [...by].map(
+		([s, a]) =>
+			`${s}  ${a.calls} calls  last ${shortTime(a.last)}  branches: ${[...a.branches].join(", ") || "-"}`,
+	);
+	return [`${by.size} sessions with LayerFS calls on project ${project} (first call order):`, ...rows].join("\n");
+}
+
 export default function layerfs(pi: ExtensionAPI) {
 	const z = pi.zod;
 	pi.setLabel("LayerFS");
 
-	pi.registerTool({
+	/** Sessions already given an omp-layerfs.prompt entry, by session id + project. */
+	const prompted = new Set<string>();
+
+	// DSH puts the conversation's project in every agent's runtime context; so do we,
+	// in this session and (factories are rebound to them) in every subagent session.
+	pi.on("before_agent_start", (event, ctx) => {
+		let b: Binding;
+		try {
+			b = readBinding(ctx.cwd);
+		} catch {
+			return undefined;
+		}
+		const line = projectLine(b);
+		const key = `${ctx.sessionManager.getSessionId()}\n${b.project}`;
+		if (!prompted.has(key)) {
+			prompted.add(key);
+			pi.appendEntry(PROMPT_ENTRY, { project: b.project, distro: b.distro, line });
+		}
+		if (event.systemPrompt.includes(line)) return undefined;
+		return { systemPrompt: [...event.systemPrompt, line] };
+	});
+
+	/**
+	 * Runs one bridge call for a tool and returns the tool result: the output
+	 * text, and in `details.layerfs` the call's traced SDK calls, each also kept
+	 * in the session as an omp-layerfs.call entry. A nonzero exit is an error
+	 * result carrying the same text and records.
+	 */
+	async function traced(
+		b: Binding,
+		ctx: { sessionManager: { getSessionId(): string } },
+		toolCallId: string,
+		run: (trace: string) => Promise<BridgeResult>,
+	) {
+		const trace = traceId(b.project, ctx);
+		const file = traceFile(b.distro, trace);
+		const tail = tailOf(trace, file);
+		await tail.ready;
+		const r = await run(trace);
+		let records: CallRecord[] = [];
+		try {
+			await readNew(tail, file);
+			records = claim(tail, b.project, toolCallId);
+		} catch {}
+		for (const rec of records) pi.appendEntry(CALL_ENTRY, rec);
+		return {
+			content: [{ type: "text" as const, text: format(r) }],
+			details: { exitCode: r.code, layerfs: records },
+			isError: r.code !== 0,
+		};
+	}
+
+	// Explicit schema type arguments: registerTool does not infer them from a zod schema.
+	const cliParams = z.object({
+		args: z.array(z.string()).min(1).describe('lfs.js argv, e.g. ["status"] or ["run", "feat", "cargo test"]'),
+		stdin: z.string().optional().describe("standard input (file content for `write`)"),
+	});
+	pi.registerTool<typeof cliParams>({
 		name: "layerfs",
 		label: "LayerFS",
 		description: LAYERFS_DESCRIPTION,
-		parameters: z.object({
-			args: z.array(z.string()).min(1).describe('lfs.js argv, e.g. ["status"] or ["run", "feat", "cargo test"]'),
-			stdin: z.string().optional().describe("standard input (file content for `write`)"),
-		}),
+		parameters: cliParams,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			const b = readBinding(ctx.cwd);
-			const r = await bridge(b.distro, ["cli", b.project, traceId(ctx), "--", ...params.args], {
-				stdin: params.stdin,
-				signal,
-				step: toolCallId,
-			});
-			return toolResult(r);
+			return traced(b, ctx, toolCallId, (trace) =>
+				bridge(b.distro, ["cli", b.project, trace, "--", ...params.args], {
+					stdin: params.stdin,
+					signal,
+					step: toolCallId,
+				}),
+			);
 		},
 	});
 
-	pi.registerTool({
+	const scriptParams = z.object({
+		source: z.string().min(1).describe("ES module source run with node in the LayerFS client"),
+	});
+	pi.registerTool<typeof scriptParams>({
 		name: "layerfs_script",
 		label: "LayerFS script",
 		description: scriptDescription(),
-		parameters: z.object({
-			source: z.string().min(1).describe("ES module source run with node in the LayerFS client"),
-		}),
+		parameters: scriptParams,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			const b = readBinding(ctx.cwd);
 			const linux = `${ROOT}/scripts/${randomUUID()}.mjs`;
@@ -207,16 +524,20 @@ export default function layerfs(pi: ExtensionAPI) {
 			await mkdir(path.dirname(file), { recursive: true });
 			await writeFile(file, params.source, "utf8");
 			try {
-				const r = await bridge(b.distro, ["script", b.project, traceId(ctx), linux], { signal, step: toolCallId });
-				return toolResult(r);
+				return await traced(b, ctx, toolCallId, (trace) =>
+					bridge(b.distro, ["script", b.project, trace, linux], { signal, step: toolCallId }),
+				);
 			} finally {
 				await unlink(file).catch(() => {});
 			}
 		},
 	});
 
+	const USAGE = "usage: /layerfs init <project> <image> <linux-src-dir> | status | down | log [n] | agents";
+
 	pi.registerCommand("layerfs", {
-		description: "LayerFS project of this folder: init <project> <image> <linux-src-dir> | status | down",
+		description:
+			"LayerFS project of this folder: init <project> <image> <linux-src-dir> | status | down | log [n] | agents",
 		handler: async (args, ctx) => {
 			const [sub, ...rest] = String(args ?? "").trim().split(/\s+/).filter(Boolean);
 			const show = (text: string, ok: boolean) => {
@@ -240,14 +561,33 @@ export default function layerfs(pi: ExtensionAPI) {
 					} else show(format(r), false);
 				} else if (sub === "status") {
 					const b = readBinding(ctx.cwd);
-					const r = await bridge(b.distro, ["cli", b.project, traceId(ctx), "--", "status"]);
+					const r = await bridge(b.distro, ["cli", b.project, traceId(b.project, ctx), "--", "status"]);
 					show(format(r), r.code === 0);
 				} else if (sub === "down") {
 					const b = readBinding(ctx.cwd);
 					const r = await bridge(b.distro, ["down", b.project]);
 					show(format(r), r.code === 0);
+				} else if (sub === "log") {
+					const n = rest[0] === undefined ? 30 : Number(rest[0]);
+					if (!Number.isInteger(n) || n < 1 || rest.length > 1) throw new Error("usage: /layerfs log [n]");
+					const b = readBinding(ctx.cwd);
+					const calls = await projectCalls(b);
+					const shown = calls.slice(-n);
+					show(
+						calls.length === 0
+							? `no traced LayerFS calls on project ${b.project}`
+							: [
+									`last ${shown.length} of ${calls.length} LayerFS calls on project ${b.project}:`,
+									...shown.map(logLine),
+								].join("\n"),
+						true,
+					);
+				} else if (sub === "agents") {
+					if (rest.length) throw new Error("usage: /layerfs agents");
+					const b = readBinding(ctx.cwd);
+					show(agentsReport(b.project, await projectCalls(b)), true);
 				} else {
-					throw new Error("usage: /layerfs init <project> <image> <linux-src-dir> | status | down");
+					throw new Error(USAGE);
 				}
 			} catch (e) {
 				show(e instanceof Error ? e.message : String(e), false);
