@@ -1,5 +1,5 @@
 {
   "distro": "layerfs-lab",
   "project": "hello",
-  "image": "bench-rust-sandbox:3"
+  "image": "omp-lfs-rust-sandbox:1"
 }

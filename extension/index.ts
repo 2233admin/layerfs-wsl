@@ -2,7 +2,7 @@
 // LayerFS JS SDK running in a WSL distro (see ../bridge/lfs-bridge.sh).
 //
 // The folder's binding is <cwd>/.omp/layerfs.json:
-//   { "distro": "layerfs-lab", "project": "hello", "image": "bench-rust-sandbox:3" }
+//   { "distro": "layerfs-lab", "project": "hello", "image": "omp-lfs-rust-sandbox:1" }
 // Every call runs the bridge with trace id `<project>.<session-id>`, so each
 // agent (a task subagent has its own session) gets its own SDK trace file
 // /root/omp-layerfs/traces/<project>.<session-id>.jsonl in the distro. The SDK's

@@ -113,6 +113,12 @@ cmd_init() {
   tmp=/tmp/omp-init-$project
   docker exec "$name" rm -rf "$tmp"
   docker cp -q "$src/." "$name:$tmp"
+  # LayerFS commits build output (target/, node_modules/) with the sources; without a
+  # /.lww rule, two Branches that both built conflict on those files at merge. The
+  # upstream default is to merge every .gitignore path newer-wins.
+  docker exec "$name" sh -c '[ -e "$1/.lww" ] || printf "%%include .gitignore\n" >"$1/.lww"' sh "$tmp"
+  docker exec "$name" sh -c '[ -e "$1/.gitignore" ]' sh "$tmp" \
+    || echo "lfs-bridge: $src has no .gitignore; /.lww includes nothing until one is added" >&2
   local rc=0
   docker exec -w "$BUNDLE" -e P="$project" -e SRC="$tmp" -e SDK="$SDK" "$name" node --input-type=module -e '
     const { LayerFS } = await import(process.env.SDK);

@@ -22,8 +22,8 @@ commit, merge and publish through the LayerFS JS SDK, which runs in a WSL distro
 Prerequisites in the distro (default `layerfs-lab`): Docker, the LayerFS checkout at
 `/root/layerfs`, the Linux bundle at `/root/layerfs-linux-build` (`layerfs-daemon`,
 `layerfs.node`), the client image `layerfs-352-runtime:node24` and a sandbox image
-(e.g. `bench-rust-sandbox:3`). `OMP_LFS_BUNDLE`, `OMP_LFS_CHECKOUT`, `OMP_LFS_ROOT`
-and `OMP_LFS_RUNTIME_IMAGE` override those paths.
+(for Rust, `omp-lfs-rust-sandbox:1` from `bridge/rust-sandbox.Dockerfile`). `OMP_LFS_BUNDLE`,
+`OMP_LFS_CHECKOUT`, `OMP_LFS_ROOT` and `OMP_LFS_RUNTIME_IMAGE` override those paths.
 
 Install the bridge and the page (from this folder, PowerShell):
 
@@ -45,12 +45,20 @@ or by copying/linking `extension/index.ts` to `<project>/.omp/extensions/layerfs
 Bind a folder to a project (copies a distro folder into a new LayerFS Store once):
 
 ```text
-/layerfs init hello bench-rust-sandbox:3 /root/omp-layerfs/fixtures/hello
+/layerfs init hello omp-lfs-rust-sandbox:1 /root/omp-layerfs/fixtures/hello
 ```
 
 This writes `.omp/layerfs.json` (`{ "distro", "project", "image" }`) in the folder;
 without it the tools refuse. `/layerfs status` lists Branches, `/layerfs down` stops the
 client container (the Store volume stays).
+
+Build output is committed with the sources (that is what makes a new Workspace start with
+a warm `target/`). So that two Branches that both built can still merge, `init` writes a
+root `/.lww` of `%include .gitignore` when the source has none: `.gitignore` paths merge
+newer-wins instead of conflicting. They are still stored; the Store never deletes history.
+Rust Sandboxes must build with `CARGO_INCREMENTAL=0` (set in the Rust sandbox image): a
+merge of two `target/` trees holding incremental session dirs fails in LayerFS with
+`Failed: invalid record: binding kind`.
 
 Agents then call, for example:
 
@@ -65,7 +73,7 @@ Agents then call, for example:
 The bridge works without OMP as well:
 
 ```powershell
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh up hello bench-rust-sandbox:3
+wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh up hello omp-lfs-rust-sandbox:1
 wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli hello t1 -- status
 wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli hello t1 -- run feat "cargo test"
 wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh script hello t1 /root/omp-layerfs/scripts/x.mjs
