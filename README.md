@@ -32,13 +32,21 @@ wsl -d layerfs-lab -- bash -c "mkdir -p /opt/omp-layerfs && tr -d '\r' < bridge/
 wsl -d layerfs-lab -- bash -c "mkdir -p /root/omp-layerfs/ui && cp ui/server.mjs ui/page.js ui/index.html /root/omp-layerfs/ui/"
 ```
 
-Load the extension for one project only, either per run:
+Install the extension as a user-scoped OMP plugin. The repository root is the plugin
+package (`package.json`, `"omp": { "extensions": ["./extension/index.ts"] }`); `link`
+junctions it into `~/.omp/plugins/node_modules/omp-layerfs`, so edits to this checkout take
+effect in the next session:
 
 ```powershell
-omp -e E:\projects\omp-layerfs\extension\index.ts
+omp plugin link E:\projects\omp-layerfs
+omp plugin list                      # shows omp-layerfs@0.1.0
 ```
 
-or by copying/linking `extension/index.ts` to `<project>/.omp/extensions/layerfs.ts`.
+Every OMP session then loads it, and any folder with `.omp/layerfs.json` works without
+`-e`, e.g. from `e2e/`: `omp -p "/layerfs status" < NUL` prints `hello`'s Branches (in
+`--mode json` the text arrives as a `layerfs` custom message). `omp plugin disable
+omp-layerfs` / `omp plugin enable omp-layerfs` turn it off and on. Passing
+`-e E:\projects\omp-layerfs\extension\index.ts` as well still loads it once.
 
 ## Use
 
@@ -155,8 +163,14 @@ Storage. `?pane=work` or `?pane=history` opens that side.
   container, which holds the Docker socket of the `layerfs-lab` distro (it starts sandbox
   containers through it). Code that runs there can control that distro's Docker, so treat
   a `layerfs_script` call like a shell command in the distro.
-- Both tools use OMP's default `exec` approval tier, so they ask for approval like `bash`
-  unless the approval mode is `yolo`. `bash.patterns` allow/deny rules do not apply to them.
+- Approval tiers (see OMP's approval modes): `layerfs` `status`, `log`, `ls`, `cat`, `grep`
+  and `diff` are `read`; `fork` and `write` are `write`; `run` and any other argv are
+  `exec`; `layerfs_script` is always `exec`. So `always-ask` asks before `fork`, `write`,
+  `run` and scripts, `write` mode asks before `run` and scripts, and `yolo` (OMP's default,
+  and every `task` subagent) asks for nothing: set an approval mode to be asked. The prompt
+  names the project, the subcommand, its Branch, and for `run` the command; for a script, its
+  first 40 lines. `tools.approval.layerfs: allow|deny|prompt` overrides per tool;
+  `bash.patterns` rules do not apply to either tool.
 - The LayerFS page has no sign-in: anything that reaches `localhost:<port>` (in the distro
   or on Windows) can read the project's History, Files and Store figures. It answers only
   reads with a localhost `Host`; DSH's writes on the same routes (Init, removal, Sandbox
@@ -164,7 +178,7 @@ Storage. `?pane=work` or `?pane=history` opens that side.
 
 ## Type check
 
-The repository has no `package.json`. To type-check the extension, install the types in a
+`package.json` declares no dependencies. To type-check the extension, install the types in a
 scratch folder (`npm i @oh-my-pi/pi-coding-agent@<omp version> typescript @types/node`) and
 run `tsc` there with a tsconfig whose `files` names `extension/index.ts` and whose `paths`
 maps `@oh-my-pi/pi-coding-agent` to `node_modules/@oh-my-pi/pi-coding-agent/dist/types/index.d.ts`.

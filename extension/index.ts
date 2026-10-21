@@ -346,6 +346,91 @@ try {
 Full SDK guide (read before non-trivial work): ${uncPath(DEFAULT_DISTRO, SKILL)} and the references/ folder beside it (methods/project.md, branch.md, workspace.md, fs-read.md, fs-write.md). When the binding names another distro, replace "${DEFAULT_DISTRO}" in that path.`;
 }
 
+// ---- approval ------------------------------------------------------------------
+
+type Tier = "read" | "write" | "exec";
+
+/** Approval tier of each `layerfs` subcommand; any other argv is `exec`. */
+const SUBCOMMAND_TIER: Record<string, Tier> = {
+	status: "read",
+	log: "read",
+	ls: "read",
+	cat: "read",
+	grep: "read",
+	diff: "read",
+	fork: "write",
+	write: "write",
+	run: "exec",
+};
+/** Lines of a `layerfs_script` source shown in its approval prompt. */
+const SCRIPT_PREVIEW_LINES = 40;
+
+/** The argv of a `layerfs` call. Approval hooks get the raw arguments, so nothing is assumed about them. */
+function cliArgv(args: unknown): unknown[] {
+	const argv = (args as { args?: unknown } | null)?.args;
+	return Array.isArray(argv) ? argv : [];
+}
+
+function cliTier(args: unknown): Tier {
+	const sub = cliArgv(args)[0];
+	return typeof sub === "string" && Object.hasOwn(SUBCOMMAND_TIER, sub) ? SUBCOMMAND_TIER[sub] : "exec";
+}
+
+function projectDetail(cwd: string): string {
+	try {
+		const b = readBinding(cwd);
+		return `Project: ${b.project} (distro ${b.distro})`;
+	} catch {
+		return `Project: none bound to ${cwd}`;
+	}
+}
+
+/** Approval prompt lines of a `layerfs` call: project, subcommand, its Branch or ref, and for `run` the command. */
+function cliDetails(cwd: string, args: unknown): string[] {
+	const argv = cliArgv(args).map(String);
+	const [sub = "", ...rest] = argv;
+	// lfs.js drops `--discard` wherever it stands; every other argument is positional.
+	const [first = "?", second] = rest.filter((a) => a !== "--discard");
+	const lines = [projectDetail(cwd), `Subcommand: ${sub || "(none)"}`];
+	switch (sub) {
+		case "status":
+			break;
+		case "run":
+			lines.push(`Branch: ${first}`, `Command: ${second ?? "?"}`);
+			if (rest.includes("--discard")) lines.push("Keeps nothing (--discard)");
+			break;
+		case "fork":
+			lines.push(`Branch: ${first} (from ${second ?? "main"})`);
+			break;
+		case "write":
+			lines.push(`Branch: ${first}`, `Path: ${second ?? "?"}`);
+			break;
+		case "log":
+			lines.push(`Branch: ${first}`);
+			break;
+		case "diff":
+			lines.push(`Branches: ${first} ${second ?? "?"}`);
+			break;
+		case "ls":
+		case "cat":
+		case "grep":
+			lines.push(`Ref: ${first}`);
+			break;
+		default:
+			lines.push(`Arguments: ${JSON.stringify(argv)}`);
+	}
+	return lines;
+}
+
+/** Approval prompt lines of a `layerfs_script` call: project and the script's first lines. */
+function scriptDetails(cwd: string, args: unknown): string[] {
+	const source = (args as { source?: unknown } | null)?.source;
+	const lines = typeof source === "string" ? source.split("\n") : [];
+	const shown = lines.slice(0, SCRIPT_PREVIEW_LINES);
+	if (lines.length > shown.length) shown.push(`… ${lines.length - shown.length} more lines`);
+	return [projectDetail(cwd), "Script (node, in the project's client container):", ...shown];
+}
+
 // ---- /layerfs log, /layerfs agents --------------------------------------------
 
 /** A finished call of some session, from the trace files. */
@@ -392,8 +477,9 @@ async function projectCalls(b: Binding): Promise<LoggedCall[]> {
 	return out;
 }
 
+/** Session ids of one process share their leading time bits; the tail tells them apart. */
 function shortSession(s: string): string {
-	return s.length > 13 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s;
+	return s.length > 12 ? `…${s.slice(-8)}` : s;
 }
 
 function shortTime(iso: string): string {
@@ -487,6 +573,27 @@ export default function layerfs(pi: ExtensionAPI) {
 		};
 	}
 
+	/**
+	 * Folder of the latest session with a UI. Approval prompts only appear there (headless
+	 * sessions such as subagents never prompt), and approval hooks get no context, so the
+	 * prompt details read the binding from it.
+	 */
+	let promptCwd: string | undefined;
+	pi.on("before_agent_start", (_event, ctx) => {
+		if (ctx.hasUI) promptCwd = ctx.cwd;
+		return undefined;
+	});
+	// ToolDefinition's type lacks formatApprovalDetails, but RegisteredToolAdapter forwards
+	// every definition key to the approval gate; spread so the literal is not excess-checked.
+	const cliApproval = {
+		approval: cliTier,
+		formatApprovalDetails: (args: unknown) => cliDetails(promptCwd ?? process.cwd(), args),
+	};
+	const scriptApproval = {
+		approval: "exec" as const,
+		formatApprovalDetails: (args: unknown) => scriptDetails(promptCwd ?? process.cwd(), args),
+	};
+
 	// Explicit schema type arguments: registerTool does not infer them from a zod schema.
 	const cliParams = z.object({
 		args: z.array(z.string()).min(1).describe('lfs.js argv, e.g. ["status"] or ["run", "feat", "cargo test"]'),
@@ -497,6 +604,7 @@ export default function layerfs(pi: ExtensionAPI) {
 		label: "LayerFS",
 		description: LAYERFS_DESCRIPTION,
 		parameters: cliParams,
+		...cliApproval,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			const b = readBinding(ctx.cwd);
 			return traced(b, ctx, toolCallId, (trace) =>
@@ -517,6 +625,7 @@ export default function layerfs(pi: ExtensionAPI) {
 		label: "LayerFS script",
 		description: scriptDescription(),
 		parameters: scriptParams,
+		...scriptApproval,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			const b = readBinding(ctx.cwd);
 			const linux = `${ROOT}/scripts/${randomUUID()}.mjs`;
@@ -542,6 +651,8 @@ export default function layerfs(pi: ExtensionAPI) {
 			const [sub, ...rest] = String(args ?? "").trim().split(/\s+/).filter(Boolean);
 			const show = (text: string, ok: boolean) => {
 				pi.sendMessage({ customType: "layerfs", content: text, display: true });
+				// Text print mode prints only assistant text; json/rpc already carry the message.
+				if (ctx.mode === "print") process.stdout.write(`${text}\n`);
 				ctx.ui.notify(ok ? `layerfs ${sub}: done` : `layerfs ${sub}: failed`, ok ? "info" : "error");
 			};
 			try {

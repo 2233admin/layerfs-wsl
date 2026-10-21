@@ -14,16 +14,23 @@
 //   - the SDK client (clientFor builds the deployment from DSH settings; the
 //     container's environment already is the deployment);
 //   - @deepseek-ai/dsh-session (records.js appends records to DSH sessions;
-//     there are none here, the extension keeps OMP's own records).
+//     there are none here, the extension keeps OMP's own records);
+//   - the docker CLI runtime.js runs for the Sandboxes tab and the runtime
+//     overview: the client has the Docker socket, not the CLI, so those reads
+//     are answered from the Engine API (see "docker"), and the home's container
+//     prefix is the bridge's LAYERFS_CONTAINER_PREFIX (Sandboxes are
+//     omp-lfs-<project>-<project>-<n>, not DSH's layerfs-<project>-<n>).
 // The page (index.html, page.js) and DSH's view/model packages are served
 // statically; the packages are imported unbuilt, as the DSH client does.
 //
 // usage: node server.mjs <project> [port]
+import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { registerHooks } from "node:module";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 const LAYERFS = process.env.OMP_LFS_CHECKOUT || "/root/layerfs";
 const ROOT = process.env.OMP_LFS_ROOT || "/root/omp-layerfs";
@@ -40,6 +47,76 @@ if (!project || !/^[a-z0-9]([a-z0-9_.-]{0,61}[a-z0-9])?$/.test(project) || !Numb
   process.exit(64);
 }
 
+// ------------------------------------------------------------------ docker
+// runtime.js reads Docker with `docker -H unix://<socket> ...`; the client has the
+// socket but no CLI. Its three reads are answered from the Engine API, as the CLI
+// prints them for exactly the formats runtime.js asks for: this home's Sandbox
+// containers, the engine's version and image names. Any other docker command fails
+// as it does without the CLI (its writes are refused by requestRejection anyway);
+// other programs run as they are.
+const PS = ["ps", "-a", "--no-trunc", "--filter", "label=layerfs.role=sandbox", "--format", '{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Label "layerfs.project"}}\t{{.Label "layerfs.sandbox"}}\t{{.Image}}\t{{.Ports}}'];
+const VERSION = ["version", "--format", "{{.Server.Version}}"];
+const IMAGES = ["image", "inspect", "-f", '{{.Id}}\t{{join .RepoTags ","}}'];
+const startsWith = (args, head) => head.every((a, i) => args[i] === a);
+const lines = (rows) => rows.map((row) => `${row}\n`).join("");
+
+/** One Engine API GET over the socket: [status, parsed body]. */
+function engineGet(socketPath, path, timeout) {
+  return new Promise((resolve, reject) => {
+    const req = request({ socketPath, path, timeout }, (res) => {
+      let body = "";
+      res.setEncoding("utf8").on("data", (d) => (body += d)).on("end", () => {
+        try { resolve([res.statusCode, JSON.parse(body)]); } catch (error) { reject(error); }
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error(`Docker did not answer ${path} within ${timeout} ms`)));
+    req.on("error", reject).end();
+  });
+}
+
+/** A container's published ports as `docker ps` prints them: `127.0.0.1:32795->30421/tcp, ...`. */
+const portsOf = (ports = []) => [...new Set(ports.map((p) => (p.PublicPort ? `${p.IP?.includes(":") ? `[${p.IP}]` : p.IP}:${p.PublicPort}->${p.PrivatePort}/${p.Type}` : `${p.PrivatePort}/${p.Type}`)))].join(", ");
+
+/** The stdout `docker <args>` would print, for the reads runtime.js makes. */
+async function dockerRead(args, timeout) {
+  const socket = args[0] === "-H" ? /^unix:\/\/(.+)$/.exec(args[1] ?? "")?.[1] : null, cmd = args.slice(2);
+  const get = async (path, missingOk = false) => {
+    const [status, body] = await engineGet(socket, path, timeout);
+    if (status === 200 || (missingOk && status === 404)) return [status, body];
+    throw new Error(body?.message ?? `Docker answered ${status} to ${path}`);
+  };
+  if (socket && cmd.length === PS.length && startsWith(cmd, PS)) {
+    const [, list] = await get(`/containers/json?all=1&filters=${encodeURIComponent(JSON.stringify({ label: ["layerfs.role=sandbox"] }))}`);
+    return lines(list.map((c) => [
+      c.Names.map((n) => n.slice(1)).filter((n) => !n.includes("/")).join(","), c.State, c.Status,
+      c.Labels?.["layerfs.project"] ?? "", c.Labels?.["layerfs.sandbox"] ?? "", c.Image, portsOf(c.Ports),
+    ].join("\t")));
+  }
+  if (socket && cmd.length === VERSION.length && startsWith(cmd, VERSION)) return lines([(await get("/version"))[1].Version]);
+  if (socket && cmd.length > IMAGES.length && startsWith(cmd, IMAGES)) {
+    const ids = cmd.slice(IMAGES.length), found = await Promise.all(ids.map((id) => get(`/images/${encodeURIComponent(id)}/json`, true)));
+    const stdout = lines(found.filter(([status]) => status === 200).map(([, image]) => `${image.Id}\t${(image.RepoTags ?? []).join(",")}`));
+    const missing = ids.filter((_, i) => found[i][0] === 404);
+    // as the CLI: the found images on stdout, and a failure for the missing ones
+    if (missing.length) throw Object.assign(new Error(`No such image: ${missing.join(", ")}`), { stdout, stderr: lines(missing.map((id) => `Error response from daemon: No such image: ${id}`)) });
+    return stdout;
+  }
+  throw Object.assign(new Error(`spawn docker ENOENT: this client has no docker CLI; docker ${cmd.join(" ")} is not answered from its socket`), { code: "ENOENT" });
+}
+
+/** child_process.execFile for runtime.js: `docker` reads from dockerRead, everything else as it is. */
+function runtimeExecFile(file, ...rest) {
+  if (file !== "docker") return execFile(file, ...rest);
+  const [args, options, callback] = typeof rest[1] === "function" ? [rest[0], undefined, rest[1]] : rest;
+  dockerRead(args ?? [], options?.timeout).then((stdout) => callback?.(null, stdout, ""), (error) => callback?.(error, error.stdout ?? "", error.stderr ?? ""));
+}
+runtimeExecFile[promisify.custom] = (file, ...rest) => (file === "docker"
+  ? dockerRead(rest[0] ?? [], rest[1]?.timeout).then((stdout) => ({ stdout, stderr: "" }))
+  : promisify(execFile)(file, ...rest));
+globalThis[Symbol.for("omp-lfs.runtimeExecFile")] = runtimeExecFile;
+const RUNTIME = pathToFileURL(join(HOST, "runtime.js")).href;
+const CHILD_PROCESS_SHIM = `data:text/javascript,${encodeURIComponent('export * from "node:child_process"; export const execFile = globalThis[Symbol.for("omp-lfs.runtimeExecFile")];')}`;
+
 // The host modules import their workspace packages by name; there is no
 // node_modules in the checkout, so the names resolve to the checkout's files.
 const SESSION_SHIM = "data:text/javascript,export function appendPluginRecord() {}";
@@ -52,6 +129,7 @@ const NAMES = [
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier === "@deepseek-ai/dsh-session") return { url: SESSION_SHIM, shortCircuit: true };
+    if (specifier === "node:child_process" && context.parentURL === RUNTIME) return { url: CHILD_PROCESS_SHIM, shortCircuit: true };
     for (const [re, path] of NAMES) {
       const m = re.exec(specifier);
       if (m) return { url: pathToFileURL(path(m)).href, shortCircuit: true };
@@ -99,6 +177,8 @@ const spec = {
   sdk: pathToFileURL(join(LAYERFS, "sdk/js/src/index.js")).href,
   operator: pathToFileURL(join(LAYERFS, "sdk/js/operator/index.js")).href,
   home: process.env.LAYERFS_HOME, docker: process.env.LAYERFS_DOCKER, image: process.env.LAYERFS_IMAGE, daemon: process.env.LAYERFS_DAEMON,
+  // runtime.js lists this home's Sandbox containers by it (the bridge sets it per client)
+  prefix: process.env.LAYERFS_CONTAINER_PREFIX || `omp-lfs-${project}-`,
 };
 const ctx = {
   sessions: new Map(), // no DSH sessions: nothing is appended to one
