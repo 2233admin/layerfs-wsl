@@ -178,17 +178,18 @@ const described = new Set<string>();
 
 /**
  * Writes the trace's lineage sidecar once per process, before its first call: whole,
- * through a rename. A failure only costs the page the session's name.
+ * through a rename. A failure only costs the page the session's name, and the next
+ * call tries again; two concurrent first calls write the same content twice.
  */
 async function writeLineage(distro: string, trace: string, ctx: SessionContext): Promise<void> {
 	if (described.has(trace)) return;
-	described.add(trace);
 	const file = uncPath(distro, `${TRACES}/${trace}.meta.json`);
 	const temp = `${file}.${randomUUID()}.tmp`;
 	try {
 		await mkdir(path.dirname(file), { recursive: true });
 		await writeFile(temp, `${JSON.stringify(await lineageOf(ctx))}\n`, "utf8");
 		await rename(temp, file);
+		described.add(trace);
 	} catch {
 		await unlink(temp).catch(() => {});
 	}
