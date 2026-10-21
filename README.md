@@ -56,9 +56,11 @@ Build output is committed with the sources (that is what makes a new Workspace s
 a warm `target/`). So that two Branches that both built can still merge, `init` writes a
 root `/.lww` of `%include .gitignore` when the source has none: `.gitignore` paths merge
 newer-wins instead of conflicting. They are still stored; the Store never deletes history.
-Rust Sandboxes must build with `CARGO_INCREMENTAL=0` (set in the Rust sandbox image): a
-merge of two `target/` trees holding incremental session dirs fails in LayerFS with
-`Failed: invalid record: binding kind`.
+Rust, with LayerFS 5fb68dd: merging two Branches whose `target/` holds Cargo incremental
+dirs (`target/*/incremental`) fails with `Failed: invalid record: binding kind`; the same
+builds merge once that subtree is gone. Either build in a Sandbox image with
+`CARGO_INCREMENTAL=0` (recipe and reason in `bridge/rust-sandbox.Dockerfile`), or remove
+`target/*/incremental` in the same Workspace command before it commits.
 
 Agents then call, for example:
 
