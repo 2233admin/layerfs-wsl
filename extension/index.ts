@@ -7,12 +7,14 @@
 // agent (a task subagent has its own session) gets its own SDK trace file
 // /root/omp-layerfs/traces/<project>.<session-id>.jsonl in the distro. The SDK's
 // trace lines do not name the project; the file name does.
+// Beside it, <project>.<session-id>.meta.json records the session's lineage
+// (root session or subagent of which), by which the LayerFS page names agents.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { type FileHandle, mkdir, open, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { type FileHandle, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import * as path from "node:path";
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent";
 
 const BRIDGE = "/opt/omp-layerfs/lfs-bridge.sh";
 const ROOT = "/root/omp-layerfs";
@@ -95,11 +97,101 @@ function uncPath(distro: string, linuxPath: string): string {
  * dot of a trace file name separates project and session.
  */
 function traceId(project: string, ctx: { sessionManager: { getSessionId(): string } }): string {
-	return `${project}.${ctx.sessionManager.getSessionId().replace(/[^A-Za-z0-9_-]/g, "_")}`;
+	return `${project}.${tracePart(ctx.sessionManager.getSessionId())}`;
+}
+
+/** A session id in the bridge's trace-id alphabet. */
+function tracePart(sessionId: string): string {
+	return sessionId.replace(/[^A-Za-z0-9_-]/g, "_");
 }
 
 function traceFile(distro: string, id: string): string {
 	return uncPath(distro, `${TRACES}/${id}.jsonl`);
+}
+
+// ---- lineage sidecar ------------------------------------------------------------
+
+type SessionContext = {
+	sessionManager: Pick<ReadonlySessionManager, "getSessionId" | "getSessionFile" | "getHeader" | "getEntries">;
+};
+
+/**
+ * <trace id>.meta.json beside a trace file: who the trace's session is, for
+ * ui/server.mjs to name agents (a conversation's root session is its lead, `main`).
+ * `parent` is the trace-id session part of the session that spawned this one, null
+ * for a root; `agent` the subagent's agent definition (`task:mid`), `name` its task
+ * name (`a1`).
+ */
+interface Lineage {
+	parent: string | null;
+	agent: string | null;
+	name: string | null;
+}
+
+/**
+ * The session id a header's `parentSession` names: a session id, or a session file
+ * whose header carries the id (a subagent's file is `<task name>.jsonl`, so the id is
+ * not in its name; a root's file name ends `_<id>.jsonl`).
+ */
+async function sessionIdOf(parentSession: string): Promise<string | null> {
+	if (!/[\\/]/.test(parentSession)) return parentSession;
+	try {
+		const fh = await open(parentSession, "r");
+		try {
+			// the header follows the fixed-width title slot (SESSION_TITLE_SLOT_BYTES)
+			const { buffer, bytesRead } = await fh.read(Buffer.alloc(4096), 0, 4096, 0);
+			for (const raw of buffer.toString("utf8", 0, bytesRead).split("\n")) {
+				try {
+					const entry = JSON.parse(raw) as { type?: unknown; id?: unknown };
+					if (entry.type === "session" && str(entry.id)) return entry.id as string;
+				} catch {}
+			}
+		} finally {
+			await fh.close();
+		}
+	} catch {}
+	return /_([0-9A-Za-z-]+)\.jsonl$/.exec(parentSession)?.[1] ?? null;
+}
+
+/**
+ * The calling session's lineage. Only subagent sessions carry a `session_init` entry
+ * (their spawn context); a session without one is a conversation's root, whatever its
+ * header's `parentSession` says (forks and moved siblings name the session they came from).
+ */
+async function lineageOf(ctx: SessionContext): Promise<Lineage> {
+	const sm = ctx.sessionManager;
+	let init: { agent?: string } | undefined;
+	for (const entry of sm.getEntries()) if (entry.type === "session_init") init = entry;
+	if (!init) return { parent: null, agent: null, name: null };
+	const from = sm.getHeader()?.parentSession;
+	const parent = from ? await sessionIdOf(from) : null;
+	const file = sm.getSessionFile();
+	return {
+		parent: parent === null ? null : tracePart(parent),
+		agent: init.agent ?? null,
+		name: file ? path.basename(file, ".jsonl") : null,
+	};
+}
+
+/** Trace ids whose lineage sidecar this process has written. */
+const described = new Set<string>();
+
+/**
+ * Writes the trace's lineage sidecar once per process, before its first call: whole,
+ * through a rename. A failure only costs the page the session's name.
+ */
+async function writeLineage(distro: string, trace: string, ctx: SessionContext): Promise<void> {
+	if (described.has(trace)) return;
+	described.add(trace);
+	const file = uncPath(distro, `${TRACES}/${trace}.meta.json`);
+	const temp = `${file}.${randomUUID()}.tmp`;
+	try {
+		await mkdir(path.dirname(file), { recursive: true });
+		await writeFile(temp, `${JSON.stringify(await lineageOf(ctx))}\n`, "utf8");
+		await rename(temp, file);
+	} catch {
+		await unlink(temp).catch(() => {});
+	}
 }
 
 /** The line DSH puts in each agent's context (dsh/packages/host/src/env.js projectContext). */
@@ -551,14 +643,14 @@ export default function layerfs(pi: ExtensionAPI) {
 	 */
 	async function traced(
 		b: Binding,
-		ctx: { sessionManager: { getSessionId(): string } },
+		ctx: SessionContext,
 		toolCallId: string,
 		run: (trace: string) => Promise<BridgeResult>,
 	) {
 		const trace = traceId(b.project, ctx);
 		const file = traceFile(b.distro, trace);
 		const tail = tailOf(trace, file);
-		await tail.ready;
+		await Promise.all([tail.ready, writeLineage(b.distro, trace, ctx)]);
 		const r = await run(trace);
 		let records: CallRecord[] = [];
 		try {
@@ -672,7 +764,9 @@ export default function layerfs(pi: ExtensionAPI) {
 					} else show(format(r), false);
 				} else if (sub === "status") {
 					const b = readBinding(ctx.cwd);
-					const r = await bridge(b.distro, ["cli", b.project, traceId(b.project, ctx), "--", "status"]);
+					const trace = traceId(b.project, ctx);
+					await writeLineage(b.distro, trace, ctx);
+					const r = await bridge(b.distro, ["cli", b.project, trace, "--", "status"]);
 					show(format(r), r.code === 0);
 				} else if (sub === "down") {
 					const b = readBinding(ctx.cwd);

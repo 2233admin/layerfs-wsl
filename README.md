@@ -140,9 +140,11 @@ the agents on them, the Store's storage and the project terminal of the calls; H
 has the project's tree of Branches, Commits and Layers, the Files at a picked point and
 Storage. `?pane=work` or `?pane=history` opens that side.
 
-- Every OMP session with a trace file on the project is one agent, named by the last
-  characters of its session id (as `/layerfs log` shows them), so the page shows each
-  `task` subagent apart. No session is the lead: the view's lead (`main`) stays unassigned.
+- Every OMP session with a trace file on the project is one agent. The extension writes
+  `<project>.<session-id>.meta.json` beside each trace (`parent`: the spawning session, null
+  for a conversation's root; `agent`, `name`: the subagent's agent and task name). The most
+  recently active root is the view's lead, `main`; a subagent whose task name is unique is
+  shown by it; the rest by the last characters of their session id.
 - History comes from the Store; the agents' calls are replayed on top of it, as DSH's
   LayerFS tab does, and new calls appear about two seconds after they end (the page
   polls every 1.5 s). Workspaces show while a call has them mounted.

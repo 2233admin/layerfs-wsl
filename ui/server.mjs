@@ -9,8 +9,11 @@
 // and TreeReader (trees.js: inspect.snapshot / Store History / Files reads /
 // storage through one SDK client). What DSH's runtime supplies is shimmed here:
 //   - bindings: one project; every trace file <project>.<omp-session-id>.jsonl
-//     is one agent, named by the session id's last characters, under one root
-//     (the project's name), so /layerfs/session/<project> is all its agents;
+//     is one agent under one root (the project's name), so
+//     /layerfs/session/<project> is all its agents. The extension's lineage
+//     sidecar <project>.<omp-session-id>.meta.json makes the latest active
+//     root session the lead, `main`, and gives subagents their task names;
+//     other agents are named by the session id's last characters;
 //   - the SDK client (clientFor builds the deployment from DSH settings; the
 //     container's environment already is the deployment);
 //   - @deepseek-ai/dsh-session (records.js appends records to DSH sessions;
@@ -145,16 +148,53 @@ const [{ registerRoutes }, { Collector }, { TreeReader }] = await Promise.all([h
 const PROJECT = { name: project, source: null, volume: process.env.LAYERFS_VOLUME ?? null, created: 0 };
 /** trace id (<project>.<session>) -> { root, name } */
 const agents = new Map();
+/** trace id -> its lineage sidecar <trace id>.meta.json ({ parent, agent, name }, from the extension), once read */
+const lineage = new Map();
 const traceIdOf = (file) => {
   if (!file.startsWith(`${project}.`) || !file.endsWith(".jsonl")) return null;
   const session = file.slice(project.length + 1, -6);
   return session && !session.includes(".") ? `${project}.${session}` : null;
 };
-/** An agent's name: its session id's tail, longer while another agent has it. */
-function nameOf(id) {
-  const session = id.slice(project.length + 1), taken = new Set([...agents.values()].map((a) => a.name));
-  for (let k = 4; k < session.length; k += 2) if (!taken.has(session.slice(-k))) return session.slice(-k);
-  return session;
+/** The sidecar of a trace, or undefined while it is missing or half written. */
+function readLineage(id) {
+  try {
+    const meta = JSON.parse(readFileSync(join(TRACES, `${id}.meta.json`), "utf8"));
+    return meta && typeof meta === "object" && (meta.parent === null || typeof meta.parent === "string") ? meta : undefined;
+  } catch {
+    return undefined;
+  }
+}
+/**
+ * Names every agent, in the order their trace files appeared. The lead, `main` (the
+ * view's lead), is the root session (sidecar parent null) whose trace changed last;
+ * an agent whose sidecar gives a task name (or else agent name) no other agent has
+ * is named by it; the rest by their session id's tail, longer while another agent
+ * has it. Without sidecars, every agent has its tail.
+ */
+function nameAgents() {
+  let lead = null, leadTime = -Infinity;
+  for (const id of agents.keys()) {
+    if (lineage.get(id)?.parent !== null) continue;
+    const time = statSync(join(TRACES, `${id}.jsonl`), { throwIfNoEntry: false })?.mtimeMs ?? -Infinity;
+    if (time > leadTime) { lead = id; leadTime = time; }
+  }
+  const labels = new Map(), uses = new Map();
+  for (const id of agents.keys()) {
+    const meta = lineage.get(id), label = id === lead ? null : meta?.name || meta?.agent;
+    if (typeof label === "string" && label && label !== "main") { labels.set(id, label); uses.set(label, (uses.get(label) ?? 0) + 1); }
+  }
+  const names = new Map(), taken = new Set(lead ? ["main"] : []);
+  if (lead) names.set(lead, "main");
+  for (const [id, label] of labels) if (uses.get(label) === 1) { names.set(id, label); taken.add(label); }
+  for (const id of agents.keys()) {
+    if (names.has(id)) continue;
+    const session = id.slice(project.length + 1);
+    let name = session;
+    for (let k = 4; k < session.length; k += 2) if (!taken.has(session.slice(-k))) { name = session.slice(-k); break; }
+    names.set(id, name);
+    taken.add(name);
+  }
+  for (const [id, agent] of agents) agent.name = names.get(id);
 }
 const bindings = {
   agent: (id) => agents.get(id) ?? null,
@@ -194,9 +234,11 @@ function collect() {
   if (existsSync(TRACES)) for (const file of readdirSync(TRACES)) {
     const id = traceIdOf(file);
     if (!id || agents.has(id)) continue;
-    agents.set(id, { root: project, name: nameOf(id) });
+    agents.set(id, { root: project, name: null });
     collector.tails.set(id, { file: join(TRACES, file), offset: 0, rest: "", project });
   }
+  for (const id of agents.keys()) if (!lineage.has(id)) { const meta = readLineage(id); if (meta) lineage.set(id, meta); }
+  nameAgents();
   collector.poll();
   collector.pending.clear(); // records for DSH sessions, of which there are none
 }

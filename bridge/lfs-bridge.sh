@@ -45,26 +45,30 @@ image_id() {
 }
 
 # up <project> <image>: the project's client container, running. Idempotent;
-# a client made for another image is recreated (the Store volume stays).
+# a client whose LAYERFS_IMAGE (or runtime image) resolves to another image id
+# is recreated (the Store volume stays).
 cmd_up() {
   [ $# -eq 2 ] || usage
-  local project=$1 image=$2 name sbx runtime have
+  local project=$1 image=$2 name sbx runtime have have_rt have_id
   check_project "$project"
   name=$(client "$project")
   sbx=$(image_id "$image")
   runtime=$(image_id "$RUNTIME_IMAGE")
-  if have=$(docker inspect --format '{{index .Config.Labels "omp-lfs.image"}} {{.Image}}' "$name" 2>/dev/null); then
-    if [ "$have" = "$sbx $runtime" ]; then
+  if have_rt=$(docker inspect --format '{{.Image}}' "$name" 2>/dev/null); then
+    have=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$name" | sed -n 's/^LAYERFS_IMAGE=//p')
+    have_id=$(docker image inspect --format '{{.Id}}' "$have" 2>/dev/null || echo "${have:-none}")
+    if [ "$have_id $have_rt" = "$sbx $runtime" ]; then
       [ "$(docker inspect --format '{{.State.Running}}' "$name")" = true ] || docker start "$name" >/dev/null
-      echo "client $name up (image $image)"
+      echo "client $name up (image $image, unchanged)"
       return
     fi
+    echo "client $name recreated: LAYERFS_IMAGE $have_id -> $sbx ($image), runtime $have_rt -> $runtime; Store volume $name-store kept"
     docker rm -f "$name" >/dev/null
   fi
   mkdir -p "$ROOT/scripts" "$ROOT/traces"
   docker volume inspect "$name-store" >/dev/null 2>&1 || docker volume create "$name-store" >/dev/null
   docker run -d --name "$name" --pull never --init \
-    --label omp-lfs.project="$project" --label omp-lfs.image="$sbx" \
+    --label omp-lfs.project="$project" \
     --mount type=bind,src="$BUNDLE",dst="$BUNDLE",readonly \
     --mount type=bind,src="$LAYERFS",dst="$LAYERFS",readonly \
     --mount type=bind,src="$ROOT",dst="$ROOT" \
