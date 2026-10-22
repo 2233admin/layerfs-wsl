@@ -501,10 +501,11 @@ cmd_ui() {
   fi
   registry_set "$project" "$port"
   docker exec -d -w "$BUNDLE" "$name" sh -c "echo \$\$ > $UI_PID; echo $port > $UI_PORT; exec node $ROOT/ui/server.mjs $project $port > $UI_LOG 2>&1"
+  # ready when the page answers as this project's (the log may still hold an old run's line)
   local i
   for i in $(seq 50); do
     sleep 0.2
-    if docker exec "$name" grep -q '^LayerFS page' $UI_LOG 2>/dev/null; then
+    if [ "$(page_project "$port")" = "$project" ]; then
       echo "LayerFS page of $project: http://localhost:$port"
       return
     fi

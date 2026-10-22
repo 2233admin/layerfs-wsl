@@ -55,10 +55,13 @@ the bridge, the page and the `hello` fixture. Finished steps are skipped, so run
 resumes or repairs an install. It ends with the `/layerfs init` line to run in OMP; for a
 distro other than `layerfs-lab`, that line names it as its last argument.
 
-Tested from a fresh clone into a new distro: about 4 minutes, then `/layerfs init`, an OMP
-agent's fork / `cargo test` / non-fast-forward merge loop and the page all worked. All WSL 2
-distros share one network namespace, so two distros must not run their own dockerd at the same
-time: both would claim `docker0`. That test ran while `layerfs-lab`'s dockerd was stopped.
+Tested from a fresh clone into a new distro (with `-NoPlugin`, as this machine's plugin was
+already linked to another checkout): about 4 minutes, then `/layerfs init`, an OMP agent's
+fork / `cargo test` / non-fast-forward merge loop and the page all worked. All WSL 2 distros
+share one network namespace, so two distros must not run their own dockerd at the same time:
+both would claim `docker0`. `distro-setup.sh` stops when a `docker0` exists before its distro's
+dockerd first ran; stop the other distro's dockerd for as long as this one runs, then pass
+`-SharedNetworkOk`. The test ran while `layerfs-lab`'s dockerd was stopped.
 
 What the bridge expects in the distro (`distro-setup.sh` provides all of it): Docker, the client
 image `layerfs-352-runtime:node24` (built from the core checkout's
@@ -86,17 +89,18 @@ Sandbox images: `bridge/rust-sandbox.Dockerfile` (`omp-lfs-rust-sandbox:2`, incr
 Cargo builds; the recipe explains why it must match the host's toolchain) and
 `bridge/node-sandbox.Dockerfile` (`omp-lfs-node-sandbox:3`, pnpm projects).
 
-Rollback to the 5fb68dd core is an environment change while the project is idle:
-`OMP_LFS_BUNDLE=/root/layerfs-linux-build OMP_LFS_CHECKOUT=/root/layerfs lfs-bridge.sh up <p>
-omp-lfs-rust-sandbox:1` (the Rust image without incremental builds, see below), then `ui <p>`.
-For OMP, set the same two variables on Windows and list them in `WSLENV`
+Rollback to the 5fb68dd core (only on an install that still has the old bundle
+`/root/layerfs-linux-build`; `install.ps1` does not make one) is an environment change while
+the project is idle: `OMP_LFS_BUNDLE=/root/layerfs-linux-build OMP_LFS_CHECKOUT=/root/layerfs
+lfs-bridge.sh up <p> omp-lfs-rust-sandbox:1` (the Rust image without incremental builds, see
+below), then `ui <p>`. For OMP, set the same two variables on Windows and list them in `WSLENV`
 (`OMP_LFS_BUNDLE/u:OMP_LFS_CHECKOUT/u`); this OMP route has not been run yet. Stores written
 by either core open on the other (tested both ways on copies of real Stores).
 
 After changing `bridge/` or `ui/` in this checkout, install them again (from this folder):
 
 ```powershell
-wsl -d layerfs-lab -- bash -c "tr -d '\r' < bridge/lfs-bridge.sh > /opt/omp-layerfs/lfs-bridge.sh"
+wsl -d layerfs-lab -- bash -c "tr -d '\r' < bridge/lfs-bridge.sh > /opt/omp-layerfs/lfs-bridge.sh && chmod 755 /opt/omp-layerfs/lfs-bridge.sh"
 wsl -d layerfs-lab -- bash -c "cp ui/server.mjs ui/page.js ui/index.html /root/omp-layerfs/ui/"
 ```
 

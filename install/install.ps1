@@ -11,12 +11,15 @@ Run again to resume or repair; finished steps are skipped.
 into the folder's .omp/layerfs.json, which every later call follows.
 -FromSource builds the LayerFS core bundle (a release cargo build, tens of minutes)
 instead of downloading this repository's release asset.
+-SharedNetworkOk: start this distro's dockerd although docker0 exists, after stopping the
+dockerd of the other WSL distro that made it (all WSL 2 distros share one network).
 #>
 param(
 	[string]$Distro = "layerfs-lab",
 	[string]$Location,
 	[switch]$FromSource,
-	[switch]$NoPlugin
+	[switch]$NoPlugin,
+	[switch]$SharedNetworkOk
 )
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
@@ -44,6 +47,7 @@ if ($pid1 -ne "systemd") {
 $linuxRepo = (wsl.exe -d $Distro -u root --exec wslpath -a $repo | Out-String).Trim()
 $setup = @("-d", $Distro, "-u", "root", "--exec", "bash", "$linuxRepo/install/distro-setup.sh")
 if ($FromSource) { $setup += "--from-source" }
+if ($SharedNetworkOk) { $setup += "--shared-network-ok" }
 Invoke-Wsl @setup
 
 if (-not $NoPlugin) {

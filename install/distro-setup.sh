@@ -1,5 +1,6 @@
 #!/bin/bash
-# distro-setup.sh [--from-source]: set up omp-layerfs in an Arch Linux WSL distro, as root.
+# distro-setup.sh [--from-source] [--shared-network-ok]: set up omp-layerfs in an Arch Linux
+# WSL distro, as root.
 # Run from this checkout (install.ps1 does); every step is skipped when already done, so
 # running it again resumes or repairs an install.
 #
@@ -22,12 +23,14 @@ ROOT=/root/omp-layerfs RUNTIME_IMAGE=layerfs-352-runtime:node24
 RUST_IMAGE=omp-lfs-rust-sandbox:2 NODE_IMAGE=omp-lfs-node-sandbox:3
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
 
-from_source=0
-case ${1:-} in
-  "") ;;
-  --from-source) from_source=1 ;;
-  *) echo "usage: distro-setup.sh [--from-source]" >&2; exit 64 ;;
-esac
+from_source=0 shared_ok=0
+for a in "$@"; do
+  case $a in
+    --from-source) from_source=1 ;;
+    --shared-network-ok) shared_ok=1 ;;
+    *) echo "usage: distro-setup.sh [--from-source] [--shared-network-ok]" >&2; exit 64 ;;
+  esac
+done
 step() { printf '\n== %s\n' "$*"; }
 die() { echo "distro-setup: $*" >&2; exit 1; }
 
@@ -37,7 +40,13 @@ die() { echo "distro-setup: $*" >&2; exit 1; }
 
 step "packages"
 [ -s /etc/pacman.d/gnupg/trustdb.gpg ] || { pacman-key --init; pacman-key --populate archlinux; }
-pacman -Syu --noconfirm --needed git docker curl
+pacman -Syu --noconfirm --needed git docker curl iproute2
+# All WSL 2 distros share one network namespace. A docker0 there before this distro's dockerd
+# ever ran belongs to another distro's dockerd, and a second dockerd would claim it too
+# (containers of both on one bridge, each daemon handing out the same addresses).
+if [ ! -d /var/lib/docker/network ] && ip link show docker0 >/dev/null 2>&1 && [ $shared_ok = 0 ]; then
+  die "docker0 already exists: another WSL distro runs (or ran) its own dockerd. Stop it there (systemctl stop docker.socket docker.service) for as long as this distro's dockerd runs, then run this again with --shared-network-ok (install.ps1 -SharedNetworkOk)"
+fi
 systemctl enable --now docker
 docker version --format 'docker engine {{.Server.Version}}'
 
