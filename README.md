@@ -134,11 +134,11 @@ Agents then call, for example:
 The bridge works without OMP as well:
 
 ```powershell
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh up hello omp-lfs-rust-sandbox:2
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli hello hello.t1 -- status
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli hello hello.t1 -- run feat "cargo test"
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh script hello hello.t1 /root/omp-layerfs/scripts/x.mjs
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh down hello
+wsl -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh up hello omp-lfs-rust-sandbox:2
+wsl -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh cli hello hello.t1 -- status
+wsl -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh cli hello hello.t1 -- run feat "cargo test"
+wsl -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh script hello hello.t1 /root/omp-layerfs/scripts/x.mjs
+wsl -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh down hello
 ```
 
 ### What each agent sees and keeps
@@ -186,7 +186,7 @@ cmd /c "omp -p --mode json -e ..\extension\index.ts ""/layerfs agents"" < NUL > 
 removes nothing). It needs no binding: in a folder without `.omp/layerfs.json` it uses
 `layerfs-lab`; with one, the binding's distro, and the bound project's row is marked `*`
 (a note follows when that project is not listed). Without OMP:
-`wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh projects`.
+`wsl -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh projects`.
 
 ```text
 docker engine 29.9.2, /var/lib/docker: 897G free of 1007G
@@ -260,16 +260,16 @@ from the files of the current `main`:
 Without OMP:
 
 ```powershell
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh export hello /root/hello-main
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh rotate hello omp-lfs-rust-sandbox:2
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh remove hello hello
+wsl -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh export hello /root/hello-main
+wsl -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh rotate hello omp-lfs-rust-sandbox:2
+wsl -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh remove hello hello
 ```
 
 ### The LayerFS page
 
 `/layerfs ui [port]` starts the bound project's LayerFS page and prints its address;
 `/layerfs ui stop` stops it. Without OMP:
-`wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh ui hello [port]` and `... ui-stop hello`.
+`wsl -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh ui hello [port]` and `... ui-stop hello`.
 
 Each project's page is its own server in its own client container, on its own port:
 

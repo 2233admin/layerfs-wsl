@@ -25,9 +25,11 @@ What the OMP extension does that such a harness has to be told, or does without:
 - **Project context and call records.** No project line in the system prompt, no
   `omp-layerfs.call` records, no `/layerfs log|agents`; the trace files still have every
   call, and the page reads them.
-- **Git Bash on Windows** rewrites Linux paths (`/opt/...`, `/src/lib.rs`) unless
-  `MSYS_NO_PATHCONV=1` is set, and expands `$PWD` before the Workspace sees it, so Cargo
-  paths in `run` commands are relative.
+- **Argument passing.** Call the bridge with `wsl.exe -d layerfs-lab --exec ...`, which
+  hands it the arguments as they are. `wsl.exe ... -- ...` runs them through the distro's
+  shell first, which expands `$PWD` and other `$` words in a `run` command to the distro
+  side's values (Claude's first run got `/mnt/e/tmp/cc-harness` for `$PWD`). Git Bash also
+  rewrites Linux paths (`/opt/...`, `/src/lib.rs`) unless `MSYS_NO_PATHCONV=1` is set.
 
 ## Instruction file
 
@@ -39,10 +41,11 @@ Replace `<project>` and `<session>` (letters, digits, `_`, `-`).
 The code you work on is NOT in this folder. It is the project `<project>` stored in
 LayerFS, inside the WSL distro `layerfs-lab`. Reach it only through the bridge:
 
-    MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh <subcommand> ...
+    MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh <subcommand> ...
 
-Always keep the `MSYS_NO_PATHCONV=1` prefix: your Bash is Git Bash, which otherwise
-rewrites Linux paths such as `/opt/...` or `/src/lib.rs` into Windows paths.
+Always keep the `MSYS_NO_PATHCONV=1` prefix and `--exec`: your Bash is Git Bash, which
+otherwise rewrites Linux paths such as `/opt/...` or `/src/lib.rs` into Windows paths, and
+without `--exec` the distro's shell would expand `$` words in your arguments.
 
 ## Your session
 
@@ -52,7 +55,7 @@ rewrites Linux paths such as `/opt/...` or `/src/lib.rs` into Windows paths.
 
 ## CLI: one command per call
 
-    MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli <project> <project>.<session> -- <args>
+    MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh cli <project> <project>.<session> -- <args>
 
 `<args>` is one of:
 
@@ -74,7 +77,7 @@ exits 2: read it before you retry; never resend the same call blindly.
 
 `write` reads the file from stdin, e.g.
 
-    cat new_lib.rs | MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli <project> <project>.<session> -- write my-branch /src/lib.rs "add foo"
+    cat new_lib.rs | MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh cli <project> <project>.<session> -- write my-branch /src/lib.rs "add foo"
 
 ## Rules
 
@@ -96,7 +99,7 @@ The CLI has no merge. For that, write a Node ES module and run it:
    (Linux path `/root/omp-layerfs/scripts/<session>-<name>.mjs`).
 2. Run it:
 
-       MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh script <project> <project>.<session> /root/omp-layerfs/scripts/<session>-<name>.mjs
+       MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab --exec /opt/omp-layerfs/lfs-bridge.sh script <project> <project>.<session> /root/omp-layerfs/scripts/<session>-<name>.mjs
 
 Template:
 
