@@ -1,10 +1,11 @@
 #!/bin/bash
-# lfs-net.sh up|down|pick: this distro's own container network, so its dockerd shares nothing
-# with another WSL distro's. All WSL 2 distros share one network namespace: a dockerd on
-# the default docker0 would join another distro's docker0, and two dockerds managing
-# iptables would fight over the same chains. So this distro's dockerd runs with
-# {"bridge": "<ours>", "iptables": false} (install/distro-setup.sh writes it), and this
-# script provides what Docker's iptables would: the bridge, forwarding and NAT.
+# lfs-net.sh up|down|pick: this distro's own container bridge, so its dockerd does not join or
+# manage another WSL distro's. All WSL 2 distros share one network namespace (interfaces,
+# routes, netfilter, loopback ports): a dockerd on the default docker0 would join another
+# distro's docker0, and two dockerds managing iptables would fight over the same chains. So
+# this distro's dockerd runs with {"bridge": "<ours>", "iptables": false} (install/distro-
+# setup.sh writes it), and this script adds what Docker's iptables would for that bridge:
+# forwarding and NAT rules of its own subnet. Published ports still share 127.0.0.1.
 #
 #   pick  print "<bridge> <subnet> <id>" for a new install: a random id, the bridge named
 #         lfs-<id> and a subnet 10.64-127.x.0/24 derived from it (the first one from there no
@@ -12,7 +13,7 @@
 #   up    create the bridge from /etc/layerfs-bridge/net.env and add the rules (idempotent);
 #         the bridge carries this distro's id as its alias, and a bridge of that name owned
 #         by another distro is refused, never shared
-#   down  remove the rules and the bridge
+#   down  remove the rules and the bridge, if the bridge is this distro's
 # Run by lfsb-net.service before docker.service.
 set -euo pipefail
 ENV=/etc/layerfs-bridge/net.env
@@ -87,8 +88,13 @@ case ${1:-} in
   down)
     # shellcheck source=/dev/null
     . "$ENV"
+    owner="lfsb ${LFS_ID:?no LFS_ID in $ENV}"
+    if ip link show "$LFS_BRIDGE" >/dev/null 2>&1; then
+      have=$(cat "/sys/class/net/$LFS_BRIDGE/ifalias" 2>/dev/null || true)
+      [ "$have" = "$owner" ] || die "bridge $LFS_BRIDGE belongs to ${have:-something else}, not this distro; left alone"
+      ip link del "$LFS_BRIDGE"
+    fi
     rules del
-    ip link del "$LFS_BRIDGE" 2>/dev/null || true
     echo "lfs-net: $LFS_BRIDGE down"
     ;;
   *) echo "usage: lfs-net.sh up|down|pick" >&2; exit 64 ;;

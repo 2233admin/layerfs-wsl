@@ -26,6 +26,7 @@ in_volume() { docker run --rm --network none -v "$1":/s:ro "$RUNTIME_IMAGE" sh -
 
 [ -x "$OLD" ] || { echo "migrate: no omp-layerfs install here"; exit 0; }
 [ -x "$NEW" ] || die "$NEW is not installed; run install/distro-setup.sh first"
+docker image inspect "$RUNTIME_IMAGE" >/dev/null 2>&1 || die "the client image $RUNTIME_IMAGE is missing; build it (distro-setup.sh images step) and run this again"
 mkdir -p "$STATE"
 
 projects=$(docker volume ls --format '{{.Name}}' | sed -n 's/^omp-lfs-\(.*\)-store$/\1/p')

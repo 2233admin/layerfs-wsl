@@ -74,11 +74,11 @@ if [ -f /etc/omp-layerfs/net.env ] && [ ! -f /etc/layerfs-bridge/net.env ]; then
   echo "network of the omp-layerfs install carried over: $LFS_BRIDGE $LFS_SUBNET"
 elif [ -f /etc/layerfs-bridge/net.env ]; then
   echo "kept: $(tr '\n' ' ' < /etc/layerfs-bridge/net.env)"
+elif [ -e /etc/docker/daemon.json ]; then
+  die "/etc/docker/daemon.json exists and was not written by this script; refusing to change a Docker setup it does not own (use a distro of its own)"
 elif [ -d /var/lib/docker/network ]; then
   # an install from before lfs-net.sh, on docker0; moving it would change the bridge under its Sandboxes
   echo "this distro's dockerd already runs on docker0 (an older install); left as it is"
-elif [ -e /etc/docker/daemon.json ]; then
-  die "/etc/docker/daemon.json exists and was not written by this script; refusing to change a Docker setup it does not own"
 else
   read -r bridge subnet id < <(/opt/layerfs-bridge/lfs-net.sh pick)
   install -D -m 644 /dev/stdin /etc/layerfs-bridge/net.env <<<"LFS_BRIDGE=$bridge

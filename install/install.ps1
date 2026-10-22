@@ -59,6 +59,12 @@ if (-not $NoPlugin) {
 	& omp plugin link $repo
 	if ($LASTEXITCODE -ne 0) { throw "omp plugin link exited $LASTEXITCODE" }
 }
-$distroArg = if ($Distro -ne "layerfs-lab") { " $Distro" } else { "" }
-Write-Host "done. In OMP, bind a folder to a new project with:"
-Write-Host "  /layerfs init hello lfsb-rust-sandbox:2 /root/layerfs-bridge/fixtures/hello$distroArg"
+if ($NoPlugin) {
+	Write-Host "done. Create a project with the bridge (any agent harness; see docs\other-harnesses.md):"
+	Write-Host "  wsl -d $Distro -u root --exec /opt/layerfs-bridge/lfs-bridge.sh init hello lfsb-rust-sandbox:2 /root/layerfs-bridge/fixtures/hello"
+} else {
+	$distroArg = if ($Distro -ne "layerfs-lab") { " $Distro" } else { "" }
+	Write-Host "done. In OMP, bind a folder to a new project with:"
+	Write-Host "  /layerfs init hello lfsb-rust-sandbox:2 /root/layerfs-bridge/fixtures/hello$distroArg"
+	Write-Host "Other agent harnesses use the bridge directly: docs\other-harnesses.md"
+}

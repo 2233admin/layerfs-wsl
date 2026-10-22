@@ -75,10 +75,12 @@ distro's dockerd runs with `{"bridge": "lfs-<id>", "iptables": false}` in
 provides the bridge, forwarding and NAT. `<id>` is random per install and seeds a
 `10.64-127.x.0/24` subnet; both are kept in `/etc/layerfs-bridge/net.env`, so they stay this
 distro's while it is down, and the bridge carries the id as its alias: a bridge of that name
-owned by another distro is refused, never shared. Published Sandbox ports go through
-Docker's userland proxy on `127.0.0.1` (random ports). `distro-setup.sh` refuses a distro whose
-`/etc/docker/daemon.json` it did not write, and leaves an older install that already runs on
-`docker0` as it is.
+owned by another distro is refused, never shared, by `up` and by `down`. Loopback is still
+shared: published Sandbox ports go through Docker's userland proxy on `127.0.0.1`, and Docker
+skips a port another distro's dockerd already holds (tested: with 32769 taken by `layerfs-lab`,
+the other dockerd's containers got 32768 and 32770). `distro-setup.sh` refuses a distro whose
+`/etc/docker/daemon.json` it did not write, and leaves an older install of this project that
+already runs on `docker0` (like `layerfs-lab`) as it is.
 
 **From omp-layerfs (this project's old name).** On a distro installed before the rename,
 `distro-setup.sh` runs `install/migrate-from-omp-layerfs.sh`: per project it reclaims the idle
@@ -173,6 +175,11 @@ Branches, `/layerfs down` stops the
 client container (the Store volume stays). `/layerfs projects` lists every project in the
 distro ([All projects](#all-projects)). `/layerfs export`, `/layerfs rotate` and
 `/layerfs remove` are in [Rotating a project's Store](#rotating-a-projects-store).
+
+`init` copies the source folder as it is, build output included. Build output made outside
+the Sandbox (another toolchain or C compiler, e.g. on an Ubuntu distro, whose Rust Sandbox is
+Arch) is not reusable there and can fail to link; remove `target/` (or `node_modules/`) from the
+source before `init` and let the first Workspace build it.
 
 Build output is committed with the sources (that is what makes a new Workspace start with
 a warm `target/`). So that two Branches that both built can still merge, `init` writes a
