@@ -89,6 +89,25 @@ starts each client and page again. The old volumes stay until you `docker volume
 Folder bindings (`.omp/layerfs.json`) naming an `omp-lfs-*` image need the new name for
 `/layerfs rotate`.
 
+Tested from fresh clones on one machine, with `layerfs-lab`'s dockerd (on `docker0`) running
+throughout:
+
+- **Fresh Ubuntu 24.04 and fresh Arch.** `install.ps1` (`-NoPlugin`) then `/layerfs init … <distro>`, and an OMP
+  agent forked, added the crate `itoa` (downloaded from crates.io in the Sandbox), ran
+  `cargo test` (3 passed) and committed. The page answered.
+- **Coexistence.** Three dockerds ran at once. Restarting `layerfs-lab`'s dockerd left the
+  others' Sandboxes with egress, and `layerfs-lab`'s Sandbox kept egress too.
+- **Reboot.** After `wsl --terminate`, `lfsb-net.service` brought the bridge back before
+  Docker.
+- **Owner guard.** A bridge with the stopped distro's name created by another distro with
+  another owner made `lfs-net.sh up` refuse it and Docker stay down; with it removed, both
+  came back.
+- **Migration.** An install of the last omp-layerfs commit with a project, a Workspace and a
+  page, upgraded by this installer: the first run stopped with "Sandboxes still run"; the
+  run after the Sandbox closed itself copied the Store, carried the network over, retagged the
+  images, and the project's next Workspace (after a reboot) ran on `lfsb-hello-hello-1` with
+  egress.
+
 What the bridge expects in the distro (`distro-setup.sh` provides all of it): Docker, the client
 image `layerfs-352-runtime:node24` (built from the core checkout's
 `dsh/tools/history/runtime`), a sandbox image per project kind, and three LayerFS paths:
