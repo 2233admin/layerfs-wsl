@@ -1,7 +1,8 @@
 #!/bin/bash
-# lfs-bridge.sh: OMP's bridge to a LayerFS project in this WSL distro.
+# lfs-bridge.sh: layerfs-bridge, any agent harness's bridge to a LayerFS project in this
+# WSL distro (DSH has its own integration; this is for the others).
 #
-# One long-lived SDK client container per project (omp-lfs-<project>), set up
+# One long-lived SDK client container per project (lfsb-<project>), set up
 # like /root/bench/lfs_run.sh: the LayerFS bundle and checkout at their own
 # paths, the Docker socket, host networking and the project's Store volume.
 # Every `cli`/`script` call is one `docker exec` in it with the DSH_LAYERFS_*
@@ -13,7 +14,7 @@
 #   lfs-bridge.sh up     <project> <image>
 #   lfs-bridge.sh init   <project> <image> <linux-src-dir>
 #   lfs-bridge.sh cli    <project> <trace-id> -- <lfs.js args...>   (stdin passed through)
-#   lfs-bridge.sh script <project> <trace-id> <script-path>          (under $OMP_LFS_ROOT/scripts)
+#   lfs-bridge.sh script <project> <trace-id> <script-path>          (under $LFSB_ROOT/scripts)
 #   lfs-bridge.sh down   <project>
 #   lfs-bridge.sh ui     <project> [port]      (the LayerFS page; its port is kept per project, see ui-ports)
 #   lfs-bridge.sh ui-stop <project>
@@ -24,27 +25,25 @@
 #
 # env: LFS_TRACE_STEP labels this call's SDK trace lines (DSH_LAYERFS_TRACE_STEP).
 #
-# LayerFS comes from two places, chosen by env. The core: OMP_LFS_BUNDLE (layerfs-daemon,
+# LayerFS comes from two places, chosen by env. The core: LFSB_BUNDLE (layerfs-daemon,
 # layerfs.node and a COMMIT file naming the commit they were built from) with
-# OMP_LFS_CHECKOUT (that commit's checkout: SDK JS, operator, lfs.js, SKILL.md); `up`
-# refuses a bundle whose COMMIT is not the checkout's HEAD. The page: OMP_LFS_UI_CHECKOUT,
+# LFSB_CHECKOUT (that commit's checkout: SDK JS, operator, lfs.js, SKILL.md); `up`
+# refuses a bundle whose COMMIT is not the checkout's HEAD. The page: LFSB_UI_CHECKOUT,
 # whose DSH host and view/model code ui/server.mjs loads (it runs on the core's SDK).
-# A client is made for one core and page checkout (OMP_LFS_CORE in its environment);
+# A client is made for one core and page checkout (LFSB_CORE in its environment);
 # under other ones, `up` recreates it and the other subcommands refuse it.
 set -euo pipefail
 
-BUNDLE=${OMP_LFS_BUNDLE:-/root/layerfs-next-bundle}
-LAYERFS=${OMP_LFS_CHECKOUT:-/root/layerfs-next}
-UI_LAYERFS=${OMP_LFS_UI_CHECKOUT:-/root/layerfs}
-ROOT=${OMP_LFS_ROOT:-/root/omp-layerfs}
-RUNTIME_IMAGE=${OMP_LFS_RUNTIME_IMAGE:-layerfs-352-runtime:node24}
+BUNDLE=${LFSB_BUNDLE:-/root/layerfs-next-bundle}
+LAYERFS=${LFSB_CHECKOUT:-/root/layerfs-next}
+UI_LAYERFS=${LFSB_UI_CHECKOUT:-/root/layerfs}
+ROOT=${LFSB_ROOT:-/root/layerfs-bridge}
+RUNTIME_IMAGE=${LFSB_RUNTIME_IMAGE:-layerfs-352-runtime:node24}
 SDK=file://$LAYERFS/sdk/js/src/index.js
 OPERATOR=file://$LAYERFS/sdk/js/operator/index.js
 CLI=$LAYERFS/dsh/packages/host/src/lfs.js
 SKILL=$LAYERFS/.agents/skills/layerfs-js-sdk/SKILL.md
-CORE="$BUNDLE $LAYERFS $UI_LAYERFS"
-# what a client made before OMP_LFS_CORE existed was made for
-LEGACY_CORE="/root/layerfs-linux-build /root/layerfs /root/layerfs"
+CORE="$BUNDLE $LAYERFS $UI_LAYERFS $ROOT"
 
 die() { echo "lfs-bridge: $*" >&2; exit 64; }
 usage() { sed -n '12,24p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
@@ -57,37 +56,38 @@ check_project() {
 check_trace() {
   [[ $2 == "$1".* && ${2#"$1".} =~ ^[A-Za-z0-9_-]{1,128}$ ]] || die "bad trace id '$2': it must be $1.<session>, the session of letters, digits, '_' and '-'"
 }
-client() { echo "omp-lfs-$1"; }
+client() { echo "lfsb-$1"; }
 image_id() {
   docker image inspect --format '{{.Id}}' "$1" 2>/dev/null || die "image '$1' not found in this distro's Docker"
 }
 
-# The core a client was made for: its OMP_LFS_CORE, else the old bridge's fixed paths.
+# The core a client was made for: its LFSB_CORE (empty for a client without one,
+# which is then taken as made for another core).
 client_core() {
   local core
-  core=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$1" | sed -n 's/^OMP_LFS_CORE=//p')
-  echo "${core:-$LEGACY_CORE}"
+  core=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$1" | sed -n 's/^LFSB_CORE=//p')
+  echo "$core"
 }
 
 # The bundle must be built from the checkout's HEAD: its COMMIT file says from which.
 # The old bundle has none; it is taken only with the checkout it was built from.
 check_core() {
   local head built
-  [ -x "$BUNDLE/layerfs-daemon" ] && [ -f "$BUNDLE/layerfs.node" ] || die "OMP_LFS_BUNDLE $BUNDLE has no layerfs-daemon and layerfs.node"
-  [ -f "${SDK#file://}" ] || die "OMP_LFS_CHECKOUT $LAYERFS has no SDK (sdk/js/src/index.js)"
-  [ -d "$UI_LAYERFS/dsh/packages/host/src" ] || die "OMP_LFS_UI_CHECKOUT $UI_LAYERFS has no DSH host (dsh/packages/host/src)"
-  head=$(git -C "$LAYERFS" rev-parse HEAD 2>/dev/null) || die "OMP_LFS_CHECKOUT $LAYERFS is not a git checkout"
+  [ -x "$BUNDLE/layerfs-daemon" ] && [ -f "$BUNDLE/layerfs.node" ] || die "LFSB_BUNDLE $BUNDLE has no layerfs-daemon and layerfs.node"
+  [ -f "${SDK#file://}" ] || die "LFSB_CHECKOUT $LAYERFS has no SDK (sdk/js/src/index.js)"
+  [ -d "$UI_LAYERFS/dsh/packages/host/src" ] || die "LFSB_UI_CHECKOUT $UI_LAYERFS has no DSH host (dsh/packages/host/src)"
+  head=$(git -C "$LAYERFS" rev-parse HEAD 2>/dev/null) || die "LFSB_CHECKOUT $LAYERFS is not a git checkout"
   if [ -f "$BUNDLE/COMMIT" ]; then
     built=$(tr -d ' \n' < "$BUNDLE/COMMIT")
-    [ "$built" = "$head" ] || die "bundle $BUNDLE is built from $built, but checkout $LAYERFS is at $head; set OMP_LFS_BUNDLE and OMP_LFS_CHECKOUT to a matching pair"
+    [ "$built" = "$head" ] || die "bundle $BUNDLE is built from $built, but checkout $LAYERFS is at $head; set LFSB_BUNDLE and LFSB_CHECKOUT to a matching pair"
   else
-    [ "$LAYERFS" = /root/layerfs ] || die "bundle $BUNDLE has no COMMIT file; a bundle without one is taken only with OMP_LFS_CHECKOUT=/root/layerfs"
+    [ "$LAYERFS" = /root/layerfs ] || die "bundle $BUNDLE has no COMMIT file; a bundle without one is taken only with LFSB_CHECKOUT=/root/layerfs"
   fi
 }
 
 # up <project> <image>: the project's client container, running. Idempotent;
 # a client whose LAYERFS_IMAGE (or runtime image) resolves to another image id,
-# or that was made for another core or page checkout, is recreated (the Store
+# or that was made for another core, page checkout or state folder, is recreated (the Store
 # volume stays); a core change is refused while Sandboxes run.
 cmd_up() {
   [ $# -eq 2 ] || usage
@@ -116,7 +116,7 @@ cmd_up() {
     --mount type=bind,src="$LAYERFS",dst="$LAYERFS",readonly)
   [ "$UI_LAYERFS" = "$LAYERFS" ] || mounts+=(--mount type=bind,src="$UI_LAYERFS",dst="$UI_LAYERFS",readonly)
   docker run -d --name "$name" --pull never --init \
-    --label omp-lfs.project="$project" \
+    --label lfsb.project="$project" \
     "${mounts[@]}" \
     --mount type=bind,src="$ROOT",dst="$ROOT" \
     --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
@@ -126,14 +126,14 @@ cmd_up() {
     -e LAYERFS_DAEMON="$BUNDLE/layerfs-daemon" -e LAYERFS_NATIVE="$BUNDLE/layerfs.node" \
     -e LAYERFS_CONTAINER_PREFIX="$name-" -e LAYERFS_CONSTRUCTION_WORKERS=1 \
     -e LAYERFS_DAEMON_HOST=127.0.0.1 \
-    -e OMP_LFS_CORE="$CORE" -e OMP_LFS_CHECKOUT="$LAYERFS" -e OMP_LFS_UI_CHECKOUT="$UI_LAYERFS" \
+    -e LFSB_CORE="$CORE" -e LFSB_CHECKOUT="$LAYERFS" -e LFSB_UI_CHECKOUT="$UI_LAYERFS" -e LFSB_ROOT="$ROOT" \
     --network host -w "$BUNDLE" --entrypoint /bin/sh "$runtime" \
     -c 'umask 077; mkdir -p /layerfs-store/sdk-home /layerfs-store/global; exec sleep infinity' >/dev/null
   echo "client $name up (image $image, Store volume $name-store, core $(cat "$BUNDLE/COMMIT" 2>/dev/null || echo "$BUNDLE"))"
 }
 
 # The running client of <project>, started again when stopped; refused when it was
-# made for another core or page checkout than this bridge's (`up` switches it).
+# made for another core, page checkout or state folder than this bridge's (`up` switches it).
 running_client() {
   local name have
   name=$(client "$1")
@@ -143,7 +143,7 @@ running_client() {
     *) die "project '$1' has no client container; run: lfs-bridge.sh init $1 <image> <src-dir> (or up)" ;;
   esac
   have=$(client_core "$name")
-  [ "$have" = "$CORE" ] || die "client $name was made for core [$have] (bundle, checkout, page checkout), this bridge uses [$CORE]: run lfs-bridge.sh up $1 <image> to recreate it (refused while its Sandboxes run: unmount their Workspaces first), or set OMP_LFS_BUNDLE, OMP_LFS_CHECKOUT and OMP_LFS_UI_CHECKOUT to the client's"
+  [ "$have" = "$CORE" ] || die "client $name was made for [$have] (bundle, checkout, page checkout, state folder), this bridge uses [$CORE]: run lfs-bridge.sh up $1 <image> to recreate it (refused while its Sandboxes run: unmount their Workspaces first), or set LFSB_BUNDLE, LFSB_CHECKOUT, LFSB_UI_CHECKOUT and LFSB_ROOT to the client's"
   echo "$name"
 }
 
@@ -165,7 +165,7 @@ cmd_init() {
   [ -d "$src" ] || die "source folder '$src' not found in this distro"
   cmd_up "$project" "$image"
   name=$(client "$project")
-  tmp=/tmp/omp-init-$project
+  tmp=/tmp/lfsb-init-$project
   docker exec "$name" rm -rf "$tmp"
   docker cp -q "$src/." "$name:$tmp"
   # LayerFS commits build output (target/, node_modules/) with the sources; without a
@@ -240,7 +240,7 @@ refuse_busy() {
 # export <project> <dest-dir>: main's files (regular files, folders, symlinks and
 # their modes; owners are not kept) into a new or empty distro folder, without
 # the paths main's root /.gitignore ignores. main cannot be mounted, so a throwaway
-# Branch omp-export-<time> forked from it is (forking copies nothing; the Branch
+# Branch lfsb-export-<time> forked from it is (forking copies nothing; the Branch
 # stays in the project, which has no Branch removal). In its Workspace, tar writes
 # the tree to stdout, which workspace.exec streams raw to this process's tar. The
 # Sandbox image needs tar, and git when main has a /.gitignore.
@@ -281,7 +281,7 @@ let ws;
 try {
   await lf.branch.fork(process.env.BRANCH, "main");
   ws = await lf.workspace.mount(process.env.BRANCH);
-  const r = await lf.workspace.exec(ws, process.env.CMD, "omp-layerfs export", { stdout: process.stdout, stderr: process.stderr });
+  const r = await lf.workspace.exec(ws, process.env.CMD, "layerfs-bridge export", { stdout: process.stdout, stderr: process.stderr });
   if (r.exitCode !== 0) { console.error(`export: the Workspace command exited ${r.exitCode}`); process.exitCode = 2; }
 } catch (e) {
   console.error(`${e.code ?? "Error"}: ${e.message}`);
@@ -291,7 +291,7 @@ try {
   await lf.close();
 }
 EOF
-  docker exec -w "$BUNDLE" -e P="$project" -e SDK="$SDK" -e BRANCH="omp-export-$(date -u +%Y%m%d-%H%M%S)-$$" -e CMD="$cmd" \
+  docker exec -w "$BUNDLE" -e P="$project" -e SDK="$SDK" -e BRANCH="lfsb-export-$(date -u +%Y%m%d-%H%M%S)-$$" -e CMD="$cmd" \
     "$name" node --input-type=module -e "$js" | tar -xpf - --no-same-owner -C "$dest" || rc=$?
   if [ $rc -ne 0 ]; then
     if [ $created = 1 ]; then rm -rf "$dest"; else find "$dest" -mindepth 1 -delete; fi
@@ -420,7 +420,7 @@ EOF
 
 # The page's server (ui/server.mjs, installed under $ROOT/ui) runs detached in
 # the client; its pid, port and log are in the client's /tmp.
-UI_PID=/tmp/omp-lfs-ui.pid UI_PORT=/tmp/omp-lfs-ui.port UI_LOG=/tmp/omp-lfs-ui.log
+UI_PID=/tmp/lfsb-ui.pid UI_PORT=/tmp/lfsb-ui.port UI_LOG=/tmp/lfsb-ui.log
 # The pid of the client's running page server, if any. The pid file outlives a container
 # restart, after which its pid can be this very check (whose command line names
 # server.mjs too), so the process must also be node.
@@ -430,9 +430,9 @@ ui_pid() {
 
 # ui-ports: one "<project> <port>" line per project whose page was started, kept
 # across stops and restarts so a project's page keeps its URL. The page's project
-# switcher reads it (server.mjs /omp/projects). Changed under the lock only.
+# switcher reads it (server.mjs /bridge/projects). Changed under the lock only.
 UI_PORTS=$ROOT/ui-ports
-UI_FIRST_PORT=${OMP_LFS_UI_PORT:-8787}
+UI_FIRST_PORT=${LFSB_UI_PORT:-8787}
 ports_lock() { exec 9>"$UI_PORTS.lock"; flock 9; }
 registry_port() { [ -f "$UI_PORTS" ] && awk -v p="$1" '$1 == p { print $2; exit }' "$UI_PORTS" || true; }
 registry_owner() { [ -f "$UI_PORTS" ] && awk -v n="$1" '$2 == n { print $1; exit }' "$UI_PORTS" || true; }
@@ -447,8 +447,8 @@ registry_drop() {
   awk -v p="$1" '$1 != p' "$UI_PORTS" > "$UI_PORTS.tmp" && mv "$UI_PORTS.tmp" "$UI_PORTS"
 }
 port_listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
-# The project whose page answers on <port> (server.mjs /omp/whoami), if any.
-page_project() { curl -fsS -m 1 "http://127.0.0.1:$1/omp/whoami" 2>/dev/null | sed -n 's/.*"project":"\([^"]*\)".*/\1/p' || true; }
+# The project whose page answers on <port> (server.mjs /bridge/whoami), if any.
+page_project() { curl -fsS -m 1 "http://127.0.0.1:$1/bridge/whoami" 2>/dev/null | sed -n 's/.*"project":"\([^"]*\)".*/\1/p' || true; }
 # The first port from <from> on that no other project claims and nothing listens on.
 free_port() {
   local p owner
@@ -546,16 +546,16 @@ image_name() {
 }
 
 # projects: every project here, read-only. The Docker Engine and the free disk under
-# its data root; one row per project found from omp-lfs-<project>-store volumes and
-# omp-lfs-<project> clients (label omp-lfs.project); then leftovers: Sandboxes whose
+# its data root; one row per project found from lfsb-<project>-store volumes and
+# lfsb-<project> clients (label lfsb.project); then leftovers: Sandboxes whose
 # Store volume is gone, and clients without a Store volume.
 cmd_projects() {
   [ $# -eq 0 ] || usage
   local root p name vol state img size up down rows= leftovers= c line page
   root=$(docker info --format '{{.DockerRootDir}}')
   echo "docker engine $(docker version --format '{{.Server.Version}}'), $root: $(df -hP "$root" | awk 'NR == 2 { print $4 " free of " $2 }')"
-  for p in $( { docker volume ls --format '{{.Name}}' | sed -n 's/^omp-lfs-\(.*\)-store$/\1/p'
-                docker ps -a --filter label=omp-lfs.project --format '{{.Label "omp-lfs.project"}}'; } | sort -u); do
+  for p in $( { docker volume ls --format '{{.Name}}' | sed -n 's/^lfsb-\(.*\)-store$/\1/p'
+                docker ps -a --filter label=lfsb.project --format '{{.Label "lfsb.project"}}'; } | sort -u); do
     valid_project "$p" || continue
     name=$(client "$p") vol=$(client "$p")-store
     case $(docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null || echo missing) in
@@ -580,7 +580,7 @@ cmd_projects() {
       { for (i = 1; i <= NF; i++) { cell[NR, i] = $i; if (length($i) > w[i]) w[i] = length($i) } n = NF }
       END { for (r = 1; r <= NR; r++) { s = "  "; for (i = 1; i < n; i++) s = s sprintf("%-" w[i] "s  ", cell[r, i]); print s cell[r, n] } }'
   else
-    echo "no LayerFS projects (no omp-lfs-<project>-store volume, no omp-lfs-<project> client)"
+    echo "no LayerFS projects (no lfsb-<project>-store volume, no lfsb-<project> client)"
   fi
   for c in $(docker ps -aq --filter label=layerfs.role=sandbox); do
     line=$(docker inspect --format '{{.Name}} {{.State.Status}}{{range .Mounts}}{{if eq .Destination "/layerfs-store"}} {{.Name}}{{end}}{{end}}' "$c")

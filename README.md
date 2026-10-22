@@ -1,28 +1,28 @@
-# omp-layerfs
+# layerfs-bridge
 
-LayerFS for OMP agents: the DSH LayerFS integration (`dsh-layerfs`) ported to the
-OMP coding agent on Windows. Agents fork Branches, run commands in Workspaces,
-commit, merge and publish through the LayerFS JS SDK, which runs in a WSL distro.
+LayerFS for coding agents other than DSH. DSH has its own LayerFS integration
+(`dsh-layerfs`); layerfs-bridge gives the same thing to any agent harness that can run a
+command: agents fork Branches, run commands in Workspaces, commit, merge and publish through
+the LayerFS JS SDK, which runs in a WSL distro on Windows.
 
-- `bridge/lfs-bridge.sh`: runs in the distro. One long-lived SDK client container per
-  project (`omp-lfs-<project>`, Store volume `omp-lfs-<project>-store`). Each call is one
-  `docker exec` with the `DSH_LAYERFS_*` environment a DSH agent's bash call gets,
-  so DSH's `lfs.js` and SDK scripts run unchanged. SDK traces go to
-  `/root/omp-layerfs/traces/<project>.<session-id>.jsonl`, one file per OMP session and
-  project (a `task` subagent has its own session). The SDK's trace lines do not name the
-  project, so the file name does.
-- `extension/index.ts`: the OMP extension. Tools `layerfs` (an `lfs.js` command) and
-  `layerfs_script` (a Node ES module run against the SDK), the command `/layerfs`, the
-  project line in each agent's context and per-call records in each session.
-- `ui/`: the LayerFS page (DSH's Work/History view) of one project, served from its client
-  container; see [The LayerFS page](#the-layerfs-page).
-
-Only `extension/` is OMP's. The bridge is a plain command (`lfs-bridge.sh <subcommand>`, one
-`docker exec` per call), so another agent harness that can run a command can drive LayerFS
-through it the way the extension does: [Other agent harnesses](docs/other-harnesses.md) has
-the instruction file Claude Code worked with end to end. `cli` and `script` take a trace id
-`<project>.<session>` (the session of letters, digits, `_` and `-`; any other is refused):
-the page and `remove` find a project's traces by that prefix.
+- `bridge/lfs-bridge.sh`: the bridge, a plain command in the distro
+  (`lfs-bridge.sh <subcommand>`). One long-lived SDK client container per project
+  (`lfsb-<project>`, Store volume `lfsb-<project>-store`). Each call is one `docker exec` with
+  the `DSH_LAYERFS_*` environment a DSH agent's bash call gets, so DSH's `lfs.js` and SDK
+  scripts run unchanged. SDK traces go to
+  `/root/layerfs-bridge/traces/<project>.<session>.jsonl`, one file per agent session and
+  project. The SDK's trace lines do not name the project, so the file name does. `cli` and
+  `script` take that trace id `<project>.<session>` (the session of letters, digits, `_` and
+  `-`; any other is refused): the page and `remove` find a project's traces by that prefix.
+- `ui/`: the LayerFS page (DSH's Work/History/Sandboxes view) of one project, served from its
+  client container; see [The LayerFS page](#the-layerfs-page).
+- `install/`: the installer (a WSL distro with Docker, LayerFS and the bridge).
+- Adapters, one per harness:
+  - `extension/index.ts`, for OMP: tools `layerfs` (an `lfs.js` command) and
+    `layerfs_script` (a Node ES module run against the SDK), the command `/layerfs`, the
+    project line in each agent's context and per-call records in each session.
+  - [docs/other-harnesses.md](docs/other-harnesses.md): the instruction file Claude Code
+    worked with end to end, calling the bridge through `wsl.exe` itself.
 
 Two LayerFS versions are in use, each pinned:
 
@@ -37,33 +37,57 @@ Two LayerFS versions are in use, each pinned:
 
 ## Install
 
-Needs x86_64 Windows with WSL 2 and OMP. From a clone of this repository, in PowerShell:
+Needs x86_64 Windows with WSL 2. From a clone of this repository, in PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install\install.ps1
 ```
 
-`install\install.ps1` creates the Arch Linux WSL distro `layerfs-lab` (`-Distro`, `-Location`
-choose another name and folder; default `%USERPROFILE%\wsl\<distro>`) with systemd on, runs
-`install/distro-setup.sh` in it as root, and links this checkout as the OMP plugin (`-NoPlugin`
-skips that). `distro-setup.sh` installs Docker (the distro's own dockerd), clones LayerFS to
-`/root/layerfs-upstream` with the two pinned worktrees, downloads the core bundle from this
-repository's release [`core-e49d1613f`](https://github.com/2233admin/omp-layerfs/releases/tag/core-e49d1613f)
-(sha256-checked; `-FromSource` builds it instead with `bridge/build-bundle.sh`, a release
-cargo build of tens of minutes), builds the client image and both Sandbox images, and installs
-the bridge, the page and the `hello` fixture. Finished steps are skipped, so running it again
-resumes or repairs an install. It ends with the `/layerfs init` line to run in OMP; for a
-distro other than `layerfs-lab`, that line names it as its last argument.
+`install\install.ps1`:
 
-Tested twice from a fresh clone into a new distro. With `be861ff` and `-NoPlugin`: about
-4 minutes, then `/layerfs init`, an OMP agent's fork / `cargo test` / non-fast-forward merge
-loop and the page all worked. With `4780392` and the plugin link: without `-SharedNetworkOk`
-it stopped at the `docker0` check below; with it, it finished and linked the plugin, and
-`/layerfs init`, an OMP agent's fork / edit / `cargo test` and the page worked. All WSL 2
-distros share one network namespace, so two distros must not run their own dockerd at the
-same time: both would claim `docker0`. `distro-setup.sh` stops when a `docker0` exists before
-its distro's dockerd first ran; stop the other distro's dockerd for as long as this one runs,
-then pass `-SharedNetworkOk`. Both tests ran while `layerfs-lab`'s dockerd was stopped.
+1. creates the WSL distro `layerfs-lab` (`-Distro`, `-Location` choose another name and
+   folder; default `%USERPROFILE%\wsl\<distro>`) from `-Base archlinux` (default) or
+   `-Base Ubuntu-24.04`, with systemd on; an existing distro (Arch, or Ubuntu 22.04 or later)
+   is used as it is;
+2. runs `install/distro-setup.sh` in it as root: Docker (the distro's own dockerd, on its own
+   container network, below), LayerFS cloned to `/root/layerfs-upstream` with the two pinned
+   worktrees, the core bundle from this repository's release
+   [`core-e49d1613f`](https://github.com/2233admin/layerfs-bridge/releases/tag/core-e49d1613f)
+   (sha256-checked; `-FromSource` builds it instead with `bridge/build-bundle.sh`, a release
+   cargo build of tens of minutes), the client image, both Sandbox images, the bridge, the
+   page and the `hello` fixture;
+3. registers the logon task `layerfs-bridge keepalive <distro>` (`install/keepalive.ps1`): WSL
+   stops a distro a few seconds after the last `wsl.exe` using it exits, which also stops its
+   dockerd, the clients, their pages and every mounted Workspace; the task holds one hidden
+   `wsl.exe` open while you are logged on (`keepalive.ps1 -Distro <d> -Remove` removes it);
+4. links this checkout as the OMP plugin (`-NoPlugin` skips that; other harnesses need nothing
+   on the Windows side).
+
+Finished steps are skipped, so running it again resumes or repairs an install. It ends with the
+`/layerfs init` line to run in OMP; for a distro other than `layerfs-lab`, that line names it as
+its last argument. Every bridge call runs as root (`wsl -u root`): Ubuntu has a default user.
+
+**Its own container network.** All WSL 2 distros share one network namespace. A dockerd on the
+default `docker0` would join another distro's `docker0` (two daemons handing out the same
+addresses on one bridge), and two dockerds managing iptables fight over the same chains. So the
+distro's dockerd runs with `{"bridge": "lfs-<id>", "iptables": false}` in
+`/etc/docker/daemon.json`, and `install/lfs-net.sh` (run by `lfsb-net.service` before Docker)
+provides the bridge, forwarding and NAT. `<id>` is random per install and seeds a
+`10.64-127.x.0/24` subnet; both are kept in `/etc/layerfs-bridge/net.env`, so they stay this
+distro's while it is down, and the bridge carries the id as its alias: a bridge of that name
+owned by another distro is refused, never shared. Published Sandbox ports go through
+Docker's userland proxy on `127.0.0.1` (random ports). `distro-setup.sh` refuses a distro whose
+`/etc/docker/daemon.json` it did not write, and leaves an older install that already runs on
+`docker0` as it is.
+
+**From omp-layerfs (this project's old name).** On a distro installed before the rename,
+`distro-setup.sh` runs `install/migrate-from-omp-layerfs.sh`: per project it reclaims the idle
+Sandboxes through the SDK (their records name the old container and volume), refuses while
+one runs, removes the old client, copies `omp-lfs-<p>-store` to `lfsb-<p>-store` and checks
+the copy; then it moves `/root/omp-layerfs`, retags the `omp-lfs-*` images as `lfsb-*`, and
+starts each client and page again. The old volumes stay until you `docker volume rm` them.
+Folder bindings (`.omp/layerfs.json`) naming an `omp-lfs-*` image need the new name for
+`/layerfs rotate`.
 
 What the bridge expects in the distro (`distro-setup.sh` provides all of it): Docker, the client
 image `layerfs-352-runtime:node24` (built from the core checkout's
@@ -71,46 +95,46 @@ image `layerfs-352-runtime:node24` (built from the core checkout's
 
 | Variable | Default | Holds |
 |---|---|---|
-| `OMP_LFS_BUNDLE` | `/root/layerfs-next-bundle` | `layerfs-daemon`, `layerfs.node`, and a `COMMIT` file with the commit they were built from |
-| `OMP_LFS_CHECKOUT` | `/root/layerfs-next` | the LayerFS checkout at that commit: SDK, operator, `lfs.js`, SDK guide |
-| `OMP_LFS_UI_CHECKOUT` | `/root/layerfs` | the checkout (5fb68dd) whose DSH host and view code the page runs |
+| `LFSB_BUNDLE` | `/root/layerfs-next-bundle` | `layerfs-daemon`, `layerfs.node`, and a `COMMIT` file with the commit they were built from |
+| `LFSB_CHECKOUT` | `/root/layerfs-next` | the LayerFS checkout at that commit: SDK, operator, `lfs.js`, SDK guide |
+| `LFSB_UI_CHECKOUT` | `/root/layerfs` | the checkout (5fb68dd) whose DSH host and view code the page runs |
 
 `up` and `init` refuse a bundle whose `COMMIT` is not the checkout's `HEAD` (a bundle
-without `COMMIT` is taken only with `OMP_LFS_CHECKOUT=/root/layerfs`). Each client records
-its three paths (`OMP_LFS_CORE`); `up` recreates a client made for other paths (refused while
-its Sandboxes run), and `cli`, `script`, `export`, `ui` and `rotate` refuse such a client until
-`up` has run. `OMP_LFS_ROOT` and `OMP_LFS_RUNTIME_IMAGE` override the state folder and the
-client image.
+without `COMMIT` is taken only with `LFSB_CHECKOUT=/root/layerfs`). Each client records
+these three paths and the state folder `LFSB_ROOT` (default `/root/layerfs-bridge`) as
+`LFSB_CORE`; `up` recreates a client made for others (refused while its Sandboxes run), and
+`cli`, `script`, `export`, `ui` and `rotate` refuse such a client until `up` has run.
+`LFSB_RUNTIME_IMAGE` overrides the client image.
 
 `bridge/build-bundle.sh <rev>` builds the bundle: a release build in `rust:1.85.1-bookworm`
 (the addon then needs glibc 2.34 at most, which the client image has) from a worktree of
 `/root/layerfs-upstream` at `<rev>`, with `COMMIT` written beside the binaries (`JOBS` caps
 cargo's jobs, default 8).
 
-Sandbox images: `bridge/rust-sandbox.Dockerfile` (`omp-lfs-rust-sandbox:2`, incremental
+Sandbox images: `bridge/rust-sandbox.Dockerfile` (`lfsb-rust-sandbox:2`, incremental
 Cargo builds; the recipe explains why it must match the host's toolchain) and
-`bridge/node-sandbox.Dockerfile` (`omp-lfs-node-sandbox:3`, pnpm projects).
+`bridge/node-sandbox.Dockerfile` (`lfsb-node-sandbox:3`, pnpm projects).
 
 Rollback to the 5fb68dd core (only on an install that still has the old bundle
 `/root/layerfs-linux-build`; `install.ps1` does not make one) is an environment change while
-the project is idle: `OMP_LFS_BUNDLE=/root/layerfs-linux-build OMP_LFS_CHECKOUT=/root/layerfs
-lfs-bridge.sh up <p> omp-lfs-rust-sandbox:1` (the Rust image without incremental builds, see
+the project is idle: `LFSB_BUNDLE=/root/layerfs-linux-build LFSB_CHECKOUT=/root/layerfs
+lfs-bridge.sh up <p> lfsb-rust-sandbox:1` (the Rust image without incremental builds, see
 below), then `ui <p>`. For OMP, set the same two variables on Windows and list them in `WSLENV`
-(`OMP_LFS_BUNDLE/u:OMP_LFS_CHECKOUT/u`); this OMP route has not been run yet. Stores written
+(`LFSB_BUNDLE/u:LFSB_CHECKOUT/u`); this OMP route has not been run yet. Stores written
 by either core open on the other (tested both ways on copies of real Stores).
 
 After changing `bridge/` or `ui/` in this checkout, install them again (from this folder):
 
 ```powershell
-wsl -d layerfs-lab -u root -- bash -c "tr -d '\r' < bridge/lfs-bridge.sh > /opt/omp-layerfs/lfs-bridge.sh && chmod 755 /opt/omp-layerfs/lfs-bridge.sh"
-wsl -d layerfs-lab -u root -- bash -c "cp ui/server.mjs ui/page.js ui/index.html /root/omp-layerfs/ui/"
+wsl -d layerfs-lab -u root -- bash -c "tr -d '\r' < bridge/lfs-bridge.sh > /opt/layerfs-bridge/lfs-bridge.sh && chmod 755 /opt/layerfs-bridge/lfs-bridge.sh"
+wsl -d layerfs-lab -u root -- bash -c "cp ui/server.mjs ui/page.js ui/index.html /root/layerfs-bridge/ui/"
 ```
 
 The plugin: the repository root is the plugin package (`package.json`,
 `"omp": { "extensions": ["./extension/index.ts"] }`); `omp plugin link <this folder>` (done by
-`install.ps1`) junctions it into `~/.omp/plugins/node_modules/omp-layerfs`, so edits to this
-checkout take effect in the next session. `omp plugin list` shows `omp-layerfs@0.1.0`; `omp
-plugin disable omp-layerfs` / `omp plugin enable omp-layerfs` turn it off and on. Every OMP
+`install.ps1`) junctions it into `~/.omp/plugins/node_modules/layerfs-bridge`, so edits to this
+checkout take effect in the next session. `omp plugin list` shows `layerfs-bridge@0.1.0`; `omp
+plugin disable layerfs-bridge` / `omp plugin enable layerfs-bridge` turn it off and on. Every OMP
 session loads it, and any folder with `.omp/layerfs.json` works without `-e`, e.g. from `e2e/`:
 `omp -p "/layerfs status" < NUL` prints `hello`'s Branches (in `--mode json` the text arrives
 as a `layerfs` custom message).
@@ -120,7 +144,7 @@ as a `layerfs` custom message).
 Bind a folder to a project (copies a distro folder into a new LayerFS Store once):
 
 ```text
-/layerfs init hello omp-lfs-rust-sandbox:2 /root/omp-layerfs/fixtures/hello [distro]
+/layerfs init hello lfsb-rust-sandbox:2 /root/layerfs-bridge/fixtures/hello [distro]
 ```
 
 This writes `.omp/layerfs.json` (`{ "distro", "project", "image" }`) in the folder;
@@ -138,7 +162,7 @@ newer-wins instead of conflicting. They are still stored; the Store never delete
 (see [Rotating a project's Store](#rotating-a-projects-store)).
 Rust: the 5fb68dd core cannot merge two Branches whose `target/` holds Cargo incremental
 dirs (`target/*/incremental`; `Failed: invalid record: binding kind`). `e49d1613f` merges
-them; on 5fb68dd use `omp-lfs-rust-sandbox:1`, built with `CARGO_INCREMENTAL=0`.
+them; on 5fb68dd use `lfsb-rust-sandbox:1`, built with `CARGO_INCREMENTAL=0`.
 After a merge of two Branches that both built, rebuild before trusting a test run:
 `/target` keeps the newer side's build, whose fingerprints are newer than the other side's
 merged sources (a merge keeps each file's mtime), so Cargo can call the merged crate fresh
@@ -147,7 +171,7 @@ and run one side's old test binary. Seen on `hello`: 7 tests instead of 8 until
 mtimes.
 pnpm: a Workspace mounts at a new `/workspaces/<N>` each time, and pnpm 11's workspace state
 records the absolute path it installed at, so its pre-run check would reinstall the
-committed `node_modules` in every fork. `omp-lfs-node-sandbox:3` sets
+committed `node_modules` in every fork. `lfsb-node-sandbox:3` sets
 `pnpm_config_verify_deps_before_run=false` (pnpm 11 ignores `npm_config_*` for settings).
 With that check off, pnpm no longer notices stale dependencies: a Branch that changes a
 `package.json`, `pnpm-lock.yaml` or the workspace's packages must run `pnpm install` in a
@@ -166,11 +190,11 @@ Agents then call, for example:
 The bridge works without OMP as well:
 
 ```powershell
-wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh up hello omp-lfs-rust-sandbox:2
-wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh cli hello hello.t1 -- status
-wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh cli hello hello.t1 -- run feat "cargo test"
-wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh script hello hello.t1 /root/omp-layerfs/scripts/x.mjs
-wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh down hello
+wsl -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh up hello lfsb-rust-sandbox:2
+wsl -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh cli hello hello.t1 -- status
+wsl -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh cli hello hello.t1 -- run feat "cargo test"
+wsl -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh script hello hello.t1 /root/layerfs-bridge/scripts/x.mjs
+wsl -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh down hello
 ```
 
 ### What each agent sees and keeps
@@ -180,14 +204,14 @@ wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh down hello
   prompt, as DSH puts it in each agent's runtime context:
   `LayerFS project of this conversation: hello (live). Every layerfs and layerfs_script call
   has it as DSH_LAYERFS_PROJECT; ...` plus the SKILL.md path. The session also gets one
-  `omp-layerfs.prompt` entry recording the line it was given.
+  `layerfs-bridge.prompt` entry recording the line it was given.
 - **Call records.** After each `layerfs`/`layerfs_script` call the extension reads the new
   lines of that session's trace file, keeps the finished SDK calls of this tool call
   (matched by the tool-call id the SDK writes as `step`; `start` lines and torn lines are
   skipped), and returns them compactly in the tool result's `details.layerfs`
   (`method`, `ok`, `kind`, `code`/`message` on refusal, `branch`, `commit`/`head`/`layer`,
   `exitCode`, `ms`, `start`, `step`, `project`). Each record is also kept in the calling
-  session's file as a custom entry `omp-layerfs.call` — a subagent's records land in the
+  session's file as a custom entry `layerfs-bridge.call` — a subagent's records land in the
   subagent's own session. A nonzero exit is an error result that still carries its records.
 - **`/layerfs log [n]`** (default 30): the last `n` finished calls on the bound project
   across all sessions' trace files, oldest first, one line each: time (UTC), short session
@@ -196,7 +220,7 @@ wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh down hello
 - **`/layerfs agents`**: per session: number of calls, last call time, Branches touched.
 
 Both commands work without a model turn, e.g.
-`omp -p --mode json -e E:\projects\omp-layerfs\extension\index.ts "/layerfs log 50" < NUL`.
+`omp -p --mode json -e E:\projects\layerfs-bridge\extension\index.ts "/layerfs log 50" < NUL`.
 
 ### End-to-end check
 
@@ -218,19 +242,19 @@ cmd /c "omp -p --mode json -e ..\extension\index.ts ""/layerfs agents"" < NUL > 
 removes nothing). It needs no binding: in a folder without `.omp/layerfs.json` it uses
 `layerfs-lab`; with one, the binding's distro, and the bound project's row is marked `*`
 (a note follows when that project is not listed). Without OMP:
-`wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh projects`.
+`wsl -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh projects`.
 
 ```text
 docker engine 29.9.2, /var/lib/docker: 897G free of 1007G
-  PROJECT  CLIENT   SANDBOX IMAGE           STORE  SANDBOXES             PAGE
-* hello    running  omp-lfs-rust-sandbox:2  16M    0 running, 0 stopped  http://localhost:8788
-  katana   running  omp-lfs-node-sandbox:3  1.1G   0 running, 0 stopped  http://localhost:8787
+  PROJECT  CLIENT   SANDBOX IMAGE        STORE  SANDBOXES             PAGE
+* hello    running  lfsb-rust-sandbox:2  16M    0 running, 0 stopped  http://localhost:8788
+  katana   running  lfsb-node-sandbox:3  1.1G   0 running, 0 stopped  http://localhost:8787
 leftovers: none
 ```
 
 - **First line:** the Docker Engine version and the free disk under its data root.
-- **One row per project** found from an `omp-lfs-<project>-store` volume or an
-  `omp-lfs-<project>` client (label `omp-lfs.project`):
+- **One row per project** found from an `lfsb-<project>-store` volume or an
+  `lfsb-<project>` client (label `lfsb.project`):
   - `CLIENT`: the client container's state, `running`, `stopped` or `missing`.
   - `SANDBOX IMAGE`: the image new Sandboxes run (the client's `LAYERFS_IMAGE`, the
     binding's `image`) as its tag, or a short id when it has no tag.
@@ -270,7 +294,7 @@ from the files of the current `main`:
   so, and a Branch published only before them is listed as dropped too.
 - `rotate` is refused while a Sandbox of the project runs (a Sandbox closes 2 minutes
   after its last Workspace is unmounted). It exports `main` to
-  `/root/omp-layerfs/exports/<project>-<UTC time>` (the export's Sandbox closes itself
+  `/root/layerfs-bridge/exports/<project>-<UTC time>` (the export's Sandbox closes itself
   after 2 idle minutes, so `remove` of the old project waits for it), runs `init` of the
   new project from that folder with the same image, and prints the old
   and new project, the export folder and both Store volumes' sizes. The old project is
@@ -278,7 +302,7 @@ from the files of the current `main`:
 - **`/layerfs export <linux-dest-dir>`** writes the bound project's `main` into a new or
   empty distro folder: regular files, folders, symlinks and modes (not owners), without the
   paths `main`'s root `/.gitignore` ignores (`target/` and the like; a `.git` folder is
-  kept). `main` cannot be mounted, so it forks a Branch `omp-export-<time>` from `main` (no
+  kept). `main` cannot be mounted, so it forks a Branch `lfsb-export-<time>` from `main` (no
   copy; the Branch stays in the project), mounts it and streams `tar` out of the Workspace.
   The Sandbox image needs `tar`, and `git` when `main` has a `/.gitignore`.
 - **`/layerfs remove <project>`** needs the exact name and refuses the project bound to
@@ -292,27 +316,27 @@ from the files of the current `main`:
 Without OMP:
 
 ```powershell
-wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh export hello /root/hello-main
-wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh rotate hello omp-lfs-rust-sandbox:2
-wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh remove hello hello
+wsl -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh export hello /root/hello-main
+wsl -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh rotate hello lfsb-rust-sandbox:2
+wsl -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh remove hello hello
 ```
 
 ### The LayerFS page
 
 `/layerfs ui [port]` starts the bound project's LayerFS page and prints its address;
 `/layerfs ui stop` stops it. Without OMP:
-`wsl -d layerfs-lab -u root --exec /opt/omp-layerfs/lfs-bridge.sh ui hello [port]` and `... ui-stop hello`.
+`wsl -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh ui hello [port]` and `... ui-stop hello`.
 
 Each project's page is its own server in its own client container, on its own port:
 
-- **The port is kept per project** in `/root/omp-layerfs/ui-ports` (`<project> <port>`
+- **The port is kept per project** in `/root/layerfs-bridge/ui-ports` (`<project> <port>`
   lines, written under a lock), so a page keeps its address across stops and restarts.
   Without a port, a project gets its kept port, or the first free one from 8787
-  (`OMP_LFS_UI_PORT`) that no other project keeps. A kept port another program took is
+  (`LFSB_UI_PORT`) that no other project keeps. A kept port another program took is
   replaced by the next free one, and the move is printed. An explicit port that another
   project's running page holds is refused. `remove` drops the project's line.
 - **The project switcher** after the LayerFS mark lists every project in `ui-ports`
-  (`GET /omp/projects`; each other page is asked `GET /omp/whoami`). Picking one opens
+  (`GET /bridge/projects`; each other page is asked `GET /bridge/whoami`). Picking one opens
   its port with the same `?pane`. A project whose page is not running is shown as
   stopped and cannot be picked; start it with `/layerfs ui` in its folder.
 
@@ -346,7 +370,7 @@ JSON-only and same-origin. `?pane=work`, `?pane=history` or `?pane=sandboxes` op
   refused). It serves DSH's `/layerfs` routes with DSH's own handler (`host/src/route.js`)
   over DSH's trace `Collector` and `TreeReader`; it stands in only for what DSH's runtime
   gives them: the project binding, the SDK client (from the container's `LAYERFS_*`
-  environment) and DSH's session records (none here). Its log is `/tmp/omp-lfs-ui.log`
+  environment) and DSH's session records (none here). Its log is `/tmp/lfsb-ui.log`
   in the client container.
 - The page's own glue (`ui/page.js`) is the DSH client plugin's TypeScript (`replay.ts`,
   `playback.ts`, `storage.ts`, `LayerFsView.tsx`'s board) in plain JS without React.

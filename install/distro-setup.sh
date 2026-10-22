@@ -1,5 +1,5 @@
 #!/bin/bash
-# distro-setup.sh [--from-source]: set up omp-layerfs in an Arch Linux or Ubuntu (22.04 or
+# distro-setup.sh [--from-source]: set up layerfs-bridge in an Arch Linux or Ubuntu (22.04 or
 # later; tested on 24.04) WSL distro, as root.
 # Run from this checkout (install.ps1 does); every step is skipped when already done, so
 # running it again resumes or repairs an install.
@@ -16,12 +16,12 @@ UI_REV=5fb68ddc1acc3163e3ac3486133bde014c5fbed3     # the page's DSH host and vi
 UPSTREAM=https://github.com/Ephemeral-AI-Lab/layerfs.git
 FORK=https://github.com/2233admin/layerfs.git        # holds CORE_REV until #409 is merged
 FORK_BRANCH=fix/merge-binding-kind
-BUNDLE_URL=https://github.com/2233admin/omp-layerfs/releases/download/core-e49d1613f/layerfs-bundle-e49d1613f.tar.gz
+BUNDLE_URL=https://github.com/2233admin/layerfs-bridge/releases/download/core-e49d1613f/layerfs-bundle-e49d1613f.tar.gz
 BUNDLE_SHA256=c0b46bf01f082e8ab973e61eb04c786c43d889460c0a656105ad4553f73519ee
 
 SRC=/root/layerfs-upstream CORE=/root/layerfs-next BUNDLE=/root/layerfs-next-bundle UI=/root/layerfs
-ROOT=/root/omp-layerfs RUNTIME_IMAGE=layerfs-352-runtime:node24
-RUST_IMAGE=omp-lfs-rust-sandbox:2 NODE_IMAGE=omp-lfs-node-sandbox:3
+ROOT=/root/layerfs-bridge RUNTIME_IMAGE=layerfs-352-runtime:node24
+RUST_IMAGE=lfsb-rust-sandbox:2 NODE_IMAGE=lfsb-node-sandbox:3
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
 
 from_source=0
@@ -60,42 +60,42 @@ fi
 # chains. This distro's dockerd gets a bridge of its own and leaves iptables to lfs-net.sh.
 # The network is set up before Docker is installed: Ubuntu's package starts dockerd at once.
 step "container network"
-install -D -m 755 <(tr -d '\r' < "$REPO/install/lfs-net.sh") /opt/omp-layerfs/lfs-net.sh
-if [ -f /etc/omp-layerfs/net.env ]; then
-  echo "kept: $(tr '\n' ' ' < /etc/omp-layerfs/net.env)"
+install -D -m 755 <(tr -d '\r' < "$REPO/install/lfs-net.sh") /opt/layerfs-bridge/lfs-net.sh
+if [ -f /etc/layerfs-bridge/net.env ]; then
+  echo "kept: $(tr '\n' ' ' < /etc/layerfs-bridge/net.env)"
 elif [ -d /var/lib/docker/network ]; then
   # an install from before lfs-net.sh, on docker0; moving it would change the bridge under its Sandboxes
   echo "this distro's dockerd already runs on docker0 (an older install); left as it is"
 elif [ -e /etc/docker/daemon.json ]; then
   die "/etc/docker/daemon.json exists and was not written by this script; refusing to change a Docker setup it does not own"
 else
-  read -r bridge subnet id < <(/opt/omp-layerfs/lfs-net.sh pick)
-  install -D -m 644 /dev/stdin /etc/omp-layerfs/net.env <<<"LFS_BRIDGE=$bridge
+  read -r bridge subnet id < <(/opt/layerfs-bridge/lfs-net.sh pick)
+  install -D -m 644 /dev/stdin /etc/layerfs-bridge/net.env <<<"LFS_BRIDGE=$bridge
 LFS_SUBNET=$subnet
 LFS_ID=$id"
   install -D -m 644 /dev/stdin /etc/docker/daemon.json <<<"{\"bridge\": \"$bridge\", \"iptables\": false, \"ip6tables\": false}"
   echo "bridge $bridge, subnet $subnet"
 fi
-if [ -f /etc/omp-layerfs/net.env ]; then
-  cat > /etc/systemd/system/omp-lfs-net.service <<'EOF'
+if [ -f /etc/layerfs-bridge/net.env ]; then
+  cat > /etc/systemd/system/lfsb-net.service <<'EOF'
 [Unit]
-Description=omp-layerfs container network (bridge, forwarding, NAT)
+Description=layerfs-bridge container network (bridge, forwarding, NAT)
 Before=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/opt/omp-layerfs/lfs-net.sh up
-ExecStop=/opt/omp-layerfs/lfs-net.sh down
+ExecStart=/opt/layerfs-bridge/lfs-net.sh up
+ExecStop=/opt/layerfs-bridge/lfs-net.sh down
 [Install]
 WantedBy=multi-user.target
 EOF
-  install -D -m 644 /dev/stdin /etc/systemd/system/docker.service.d/omp-lfs-net.conf <<'EOF'
+  install -D -m 644 /dev/stdin /etc/systemd/system/docker.service.d/lfsb-net.conf <<'EOF'
 [Unit]
-Requires=omp-lfs-net.service
-After=omp-lfs-net.service
+Requires=lfsb-net.service
+After=lfsb-net.service
 EOF
   systemctl daemon-reload
-  systemctl enable --now omp-lfs-net.service
+  systemctl enable --now lfsb-net.service
 fi
 
 step "docker"
@@ -141,6 +141,20 @@ else
   echo "$BUNDLE downloaded ($CORE_REV)"
 fi
 
+step "bridge, page and fixture"
+mkdir -p /opt/layerfs-bridge "$ROOT/ui" "$ROOT/scripts" "$ROOT/traces" "$ROOT/fixtures"
+tr -d '\r' < "$REPO/bridge/lfs-bridge.sh" > /opt/layerfs-bridge/lfs-bridge.sh.new
+chmod 755 /opt/layerfs-bridge/lfs-bridge.sh.new && mv /opt/layerfs-bridge/lfs-bridge.sh.new /opt/layerfs-bridge/lfs-bridge.sh
+for f in server.mjs page.js index.html; do tr -d '\r' < "$REPO/ui/$f" > "$ROOT/ui/$f"; done
+[ -e "$ROOT/fixtures/hello" ] || { cp -r "$REPO/fixtures/hello" "$ROOT/fixtures/hello"; find "$ROOT/fixtures/hello" -type f -exec sed -i 's/\r$//' {} +; }
+echo "bridge /opt/layerfs-bridge/lfs-bridge.sh, page $ROOT/ui, fixture $ROOT/fixtures/hello"
+
+# an install of this project under its old name (omp-layerfs): its projects move to the new names
+if [ -x /opt/omp-layerfs/lfs-bridge.sh ]; then
+  step "migrate from omp-layerfs"
+  bash "$REPO/install/migrate-from-omp-layerfs.sh"
+fi
+
 step "images"
 image() { docker image inspect "$1" >/dev/null 2>&1 && echo "$1 present"; }
 # Dockerfiles are fed through tr: a Windows checkout may have CRLF line ends.
@@ -162,15 +176,7 @@ if ! image "$NODE_IMAGE"; then
   rm -rf "$ctx"
 fi
 
-step "bridge, page and fixture"
-mkdir -p /opt/omp-layerfs "$ROOT/ui" "$ROOT/scripts" "$ROOT/traces" "$ROOT/fixtures"
-tr -d '\r' < "$REPO/bridge/lfs-bridge.sh" > /opt/omp-layerfs/lfs-bridge.sh.new
-chmod 755 /opt/omp-layerfs/lfs-bridge.sh.new && mv /opt/omp-layerfs/lfs-bridge.sh.new /opt/omp-layerfs/lfs-bridge.sh
-for f in server.mjs page.js index.html; do tr -d '\r' < "$REPO/ui/$f" > "$ROOT/ui/$f"; done
-[ -e "$ROOT/fixtures/hello" ] || { cp -r "$REPO/fixtures/hello" "$ROOT/fixtures/hello"; find "$ROOT/fixtures/hello" -type f -exec sed -i 's/\r$//' {} +; }
-echo "bridge /opt/omp-layerfs/lfs-bridge.sh, page $ROOT/ui, fixture $ROOT/fixtures/hello"
-
 step "check"
-/opt/omp-layerfs/lfs-bridge.sh projects
+/opt/layerfs-bridge/lfs-bridge.sh projects
 echo
-echo "omp-layerfs is set up in this distro."
+echo "layerfs-bridge is set up in this distro."

@@ -1,4 +1,4 @@
-omp-layerfs
+layerfs-bridge
 Copyright (c) 2026 2233admin, MIT (see LICENSE).
 
 Portions of ui/page.js, ui/index.html and ui/server.mjs are derived from LayerFS

@@ -1,5 +1,5 @@
 # Node Sandbox image for LayerFS Workspaces of pnpm projects (built for KATANAview: Next 16,
-# pnpm 11.20). Build: docker build -t omp-lfs-node-sandbox:3 -f node-sandbox.Dockerfile .
+# pnpm 11.20). Build: docker build -t lfsb-node-sandbox:3 -f node-sandbox.Dockerfile .
 # Workspace commands run as a non-root uid, so caches live in world-writable dirs.
 FROM node:24-bookworm
 RUN corepack enable && corepack prepare pnpm@11.20.0 --activate \

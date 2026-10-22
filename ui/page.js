@@ -155,7 +155,7 @@ function storeOf(storage, state, lines = []) {
 }
 
 // ---------------------------------------------------------------- SandboxesTab.tsx
-// A project's Sandboxes: each running Sandbox (omp-lfs-<project>-<project>-<n>)
+// A project's Sandboxes: each running Sandbox (lfsb-<project>-<project>-<n>)
 // with how full it is, and each Workspace in it with its Branch, the agent that
 // mounted it, how long it has sat, its uncommitted changes and background
 // processes. LayerFS starts and closes Sandboxes by itself; the actions here end
@@ -301,7 +301,7 @@ function sandboxesView(root, name, open) {
 
 /**
  * The project switcher after the LayerFS mark: every project page the bridge started
- * (server.mjs /omp/projects, from its ui-ports file). Each project's page is its own
+ * (server.mjs /bridge/projects, from its ui-ports file). Each project's page is its own
  * server on its own port, so picking one opens that port with the same ?pane.
  */
 function projectSwitcher(root, name) {
@@ -318,7 +318,7 @@ function projectSwitcher(root, name) {
     el.title = pages.some((p) => !p.running) ? "A stopped project's page starts again with /layerfs ui in its folder" : "";
   }
   async function read() {
-    try { const res = await fetch("/omp/projects", { cache: "no-store" }); if (res.ok) pages = (await res.json()).projects; } catch { /* keep the last list */ }
+    try { const res = await fetch("/bridge/projects", { cache: "no-store" }); if (res.ok) pages = (await res.json()).projects; } catch { /* keep the last list */ }
     draw();
   }
   select.addEventListener("change", () => {

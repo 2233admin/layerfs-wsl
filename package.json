@@ -1,9 +1,9 @@
 {
-  "name": "omp-layerfs",
+  "name": "layerfs-bridge",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
-  "description": "LayerFS Branches, Workspaces and merges for OMP agents, through a WSL bridge",
+  "description": "layerfs-bridge's OMP adapter: LayerFS Branches, Workspaces and merges for OMP agents, through the layerfs-bridge WSL bridge",
   "type": "module",
   "keywords": ["omp-plugin", "omp-extension"],
   "omp": {

@@ -1,33 +1,32 @@
-// The LayerFS Work/History/Sandboxes page for one OMP project, without DeepSeek Harness.
+// The LayerFS Work/History/Sandboxes page for one project of layerfs-bridge, without DeepSeek Harness.
 // Runs in the project's client container (lfs-bridge.sh ui <project> [port]),
 // which has the SDK's LAYERFS_* deployment, both LayerFS checkouts read-only and
 // the trace folder at its own path. Two checkouts, both named in the client's
-// environment by the bridge: the core one (OMP_LFS_CHECKOUT) gives the SDK and
+// environment by the bridge: the core one (LFSB_CHECKOUT) gives the SDK and
 // operator, matching the client's daemon and native addon; the UI one
-// (OMP_LFS_UI_CHECKOUT) gives only DSH's host and view/model code, which the page
-// is written against. A client without them (made by an older bridge) has both
-// at /root/layerfs.
+// (LFSB_UI_CHECKOUT) gives only DSH's host and view/model code, which the page
+// is written against.
 //
 // The /layerfs routes are DSH's own handler (dsh/packages/host/src/route.js),
 // registered through a stand-in for the DSH plugin context, over DSH's own
 // Collector (collector.js: trace lines -> per-root view, authors of each node)
 // and TreeReader (trees.js: inspect.snapshot / Store History / Files reads /
 // storage through one SDK client). What DSH's runtime supplies is shimmed here:
-//   - bindings: one project; every trace file <project>.<omp-session-id>.jsonl
+//   - bindings: one project; every trace file <project>.<session-id>.jsonl
 //     is one agent under one root (the project's name), so
 //     /layerfs/session/<project> is all its agents. The extension's lineage
-//     sidecar <project>.<omp-session-id>.meta.json makes the latest active
+//     sidecar <project>.<session-id>.meta.json makes the latest active
 //     root session the lead, `main`, and gives subagents their task names;
 //     other agents are named by the session id's last characters;
 //   - the SDK client (clientFor builds the deployment from DSH settings; the
 //     container's environment already is the deployment);
 //   - @deepseek-ai/dsh-session (records.js appends records to DSH sessions;
-//     there are none here, the extension keeps OMP's own records);
+//     there are none here; an agent harness keeps its own records);
 //   - the docker CLI runtime.js runs for the Sandboxes tab and the runtime
 //     overview: the client has the Docker socket, not the CLI, so those reads
 //     are answered from the Engine API (see "docker"), and the home's container
 //     prefix is the bridge's LAYERFS_CONTAINER_PREFIX (Sandboxes are
-//     omp-lfs-<project>-<project>-<n>, not DSH's layerfs-<project>-<n>). The
+//     lfsb-<project>-<project>-<n>, not DSH's layerfs-<project>-<n>). The
 //     tab's actions (unmount, discard, stop) are SDK calls, no docker command;
 //     of the handler's writes only they are let through (requestRejection).
 // The page (index.html, page.js) and DSH's view/model packages are served
@@ -42,9 +41,10 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
-const LAYERFS = process.env.OMP_LFS_CHECKOUT || "/root/layerfs";
-const ROOT = process.env.OMP_LFS_ROOT || "/root/omp-layerfs";
-const DSH = join(process.env.OMP_LFS_UI_CHECKOUT || "/root/layerfs", "dsh");
+const env = (name) => process.env[name] || (console.error(`server.mjs: ${name} is not set; start the page with lfs-bridge.sh ui`), process.exit(64));
+const LAYERFS = env("LFSB_CHECKOUT");
+const ROOT = env("LFSB_ROOT");
+const DSH = join(env("LFSB_UI_CHECKOUT"), "dsh");
 const HOST = join(DSH, "packages/host/src");
 const UI = dirname(fileURLToPath(import.meta.url));
 const TRACES = join(ROOT, "traces");
@@ -123,9 +123,9 @@ function runtimeExecFile(file, ...rest) {
 runtimeExecFile[promisify.custom] = (file, ...rest) => (file === "docker"
   ? dockerRead(rest[0] ?? [], rest[1]?.timeout).then((stdout) => ({ stdout, stderr: "" }))
   : promisify(execFile)(file, ...rest));
-globalThis[Symbol.for("omp-lfs.runtimeExecFile")] = runtimeExecFile;
+globalThis[Symbol.for("lfsb.runtimeExecFile")] = runtimeExecFile;
 const RUNTIME = pathToFileURL(join(HOST, "runtime.js")).href;
-const CHILD_PROCESS_SHIM = `data:text/javascript,${encodeURIComponent('export * from "node:child_process"; export const execFile = globalThis[Symbol.for("omp-lfs.runtimeExecFile")];')}`;
+const CHILD_PROCESS_SHIM = `data:text/javascript,${encodeURIComponent('export * from "node:child_process"; export const execFile = globalThis[Symbol.for("lfsb.runtimeExecFile")];')}`;
 
 // The host modules import their workspace packages by name; there is no
 // node_modules in the checkouts, so the names resolve to checkout files: DSH's
@@ -218,7 +218,7 @@ const bindings = {
 
 // ------------------------------------------------------------------ collector
 // Its line journal is rebuilt from the trace files at every start.
-const stateDir = `/tmp/omp-lfs-ui-${project}`;
+const stateDir = `/tmp/lfsb-ui-${project}`;
 rmSync(stateDir, { recursive: true, force: true });
 const spec = {
   traceDir: TRACES, stateDir, pollMs: POLL_MS,
@@ -226,7 +226,7 @@ const spec = {
   operator: pathToFileURL(join(LAYERFS, "sdk/js/operator/index.js")).href,
   home: process.env.LAYERFS_HOME, docker: process.env.LAYERFS_DOCKER, image: process.env.LAYERFS_IMAGE, daemon: process.env.LAYERFS_DAEMON,
   // runtime.js lists this home's Sandbox containers by it (the bridge sets it per client)
-  prefix: process.env.LAYERFS_CONTAINER_PREFIX || `omp-lfs-${project}-`,
+  prefix: process.env.LAYERFS_CONTAINER_PREFIX || `lfsb-${project}-`,
 };
 const ctx = {
   sessions: new Map(), // no DSH sessions: nothing is appended to one
@@ -316,7 +316,7 @@ setInterval(() => { try { collect(); } catch (e) { console.error(`trace collecti
 // ------------------------------------------------------------------ project switcher
 // Each project's page runs in its own client on its own port (one Store per client), so the
 // pages know each other only through the bridge's ui-ports file: "<project> <port>" per line.
-// A line whose port does not answer /omp/whoami with that project is a stopped page.
+// A line whose port does not answer /bridge/whoami with that project is a stopped page.
 const UI_PORTS = join(ROOT, "ui-ports");
 async function projectPages() {
   const lines = existsSync(UI_PORTS) ? readFileSync(UI_PORTS, "utf8").split("\n") : [];
@@ -325,7 +325,7 @@ async function projectPages() {
   return Promise.all(pages.map(async (page) => {
     if (page.project === project) return { ...page, port, running: true };
     try {
-      const res = await fetch(`http://127.0.0.1:${page.port}/omp/whoami`, { signal: AbortSignal.timeout(800) });
+      const res = await fetch(`http://127.0.0.1:${page.port}/bridge/whoami`, { signal: AbortSignal.timeout(800) });
       const who = res.ok ? await res.json() : null;
       return { ...page, running: who?.project === page.project };
     } catch {
@@ -343,8 +343,8 @@ const server = createServer((req, res) => {
   if (pathname === "/layerfs" || pathname.startsWith("/layerfs/")) return route(req, res);
   const rejection = requestRejection(req);
   if (rejection !== undefined) { res.statusCode = rejection; return res.end(); }
-  if (pathname === "/omp/whoami") return sendJson(res, { project, port });
-  if (pathname === "/omp/projects") return void projectPages().then((projects) => sendJson(res, { current: project, projects }), (e) => { res.statusCode = 500; res.end(String(e.message)); });
+  if (pathname === "/bridge/whoami") return sendJson(res, { project, port });
+  if (pathname === "/bridge/projects") return void projectPages().then((projects) => sendJson(res, { current: project, projects }), (e) => { res.statusCode = 500; res.end(String(e.message)); });
   serveStatic(req, res, pathname);
 });
 server.listen(port, "127.0.0.1", () => console.log(`LayerFS page of project ${project}: http://localhost:${port}`));

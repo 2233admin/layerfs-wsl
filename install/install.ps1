@@ -1,5 +1,5 @@
 <#
-Installs omp-layerfs on Windows:
+Installs layerfs-bridge on Windows:
   1. a WSL distro, Arch Linux or Ubuntu 24.04 (created when missing; systemd on),
   2. inside it, install/distro-setup.sh: Docker on the distro's own container network,
      LayerFS, images, the bridge and the page,
@@ -55,10 +55,10 @@ Write-Host "== keeping $Distro running while you are logged on"
 & (Join-Path $PSScriptRoot "keepalive.ps1") -Distro $Distro
 
 if (-not $NoPlugin) {
-	Write-Host "== linking $repo as the OMP plugin omp-layerfs"
+	Write-Host "== linking $repo as the OMP plugin layerfs-bridge"
 	& omp plugin link $repo
 	if ($LASTEXITCODE -ne 0) { throw "omp plugin link exited $LASTEXITCODE" }
 }
 $distroArg = if ($Distro -ne "layerfs-lab") { " $Distro" } else { "" }
 Write-Host "done. In OMP, bind a folder to a new project with:"
-Write-Host "  /layerfs init hello omp-lfs-rust-sandbox:2 /root/omp-layerfs/fixtures/hello$distroArg"
+Write-Host "  /layerfs init hello lfsb-rust-sandbox:2 /root/layerfs-bridge/fixtures/hello$distroArg"

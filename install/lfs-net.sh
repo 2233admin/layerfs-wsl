@@ -9,13 +9,13 @@
 #   pick  print "<bridge> <subnet> <id>" for a new install: a random id, the bridge named
 #         lfs-<id> and a subnet 10.64-127.x.0/24 derived from it (the first one from there no
 #         address or route uses); stored in net.env, they stay this distro's while it is down
-#   up    create the bridge from /etc/omp-layerfs/net.env and add the rules (idempotent);
+#   up    create the bridge from /etc/layerfs-bridge/net.env and add the rules (idempotent);
 #         the bridge carries this distro's id as its alias, and a bridge of that name owned
 #         by another distro is refused, never shared
 #   down  remove the rules and the bridge
-# Run by omp-lfs-net.service before docker.service.
+# Run by lfsb-net.service before docker.service.
 set -euo pipefail
-ENV=/etc/omp-layerfs/net.env
+ENV=/etc/layerfs-bridge/net.env
 
 die() { echo "lfs-net: $*" >&2; exit 1; }
 
@@ -67,7 +67,7 @@ case ${1:-} in
   up)
     # shellcheck source=/dev/null
     . "$ENV"
-    owner="omp-lfs ${LFS_ID:?no LFS_ID in $ENV}"
+    owner="lfsb ${LFS_ID:?no LFS_ID in $ENV}"
     gw=${LFS_SUBNET%.0/24}.1
     if ip link show "$LFS_BRIDGE" >/dev/null 2>&1; then
       have=$(cat "/sys/class/net/$LFS_BRIDGE/ifalias" 2>/dev/null || true)
