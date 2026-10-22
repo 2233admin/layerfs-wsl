@@ -158,7 +158,21 @@ else
 fi
 
 step "bridge, page and fixture"
-# an install under the name layerfs-bridge: its state folder moves here and its command goes
+# Clients made for other paths than this install's (for example under the name layerfs-bridge,
+# whose state folder moves below) are made again for them. Before anything moves: none of their
+# projects may have a running Sandbox (`up` would refuse midway), and the pages that answer now
+# are noted, to be started again (a port in ui-ports alone does not mean the page runs).
+want="$BUNDLE $CORE $UI $ROOT" old_root=$ROOT stale="" pages=""
+[ ! -d /root/layerfs-bridge ] || old_root=/root/layerfs-bridge
+for p in $(docker ps -a --filter label=lfsb.project --format '{{.Label "lfsb.project"}}'); do
+  have=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "lfsb-$p" | sed -n 's/^LFSB_CORE=//p')
+  [ "$have" != "$want" ] || continue
+  busy=$(docker ps --filter "volume=lfsb-$p-store" --format '{{.Names}}' | grep -vx "lfsb-$p" || true)
+  [ -z "$busy" ] || die "$p: Sandboxes still run ($(echo $busy)); unmount their Workspaces, wait two minutes and run this again"
+  stale="$stale $p"
+  port=$(awk -v p="$p" '$1 == p { print $2; exit }' "$old_root/ui-ports" 2>/dev/null || true)
+  if [ -n "$port" ] && curl -fsS -m 2 "http://127.0.0.1:$port/bridge/whoami" 2>/dev/null | grep -q "\"project\":\"$p\""; then pages="$pages $p"; fi
+done
 if [ -d /root/layerfs-bridge ]; then
   [ ! -e "$ROOT" ] || die "both /root/layerfs-bridge and $ROOT exist; merge them by hand and run this again"
   mv /root/layerfs-bridge "$ROOT" && echo "/root/layerfs-bridge moved to $ROOT"
@@ -169,16 +183,13 @@ tr -d '\r' < "$REPO/bridge/lfs-wsl.sh" > /opt/layerfs-wsl/lfs-wsl.sh.new
 chmod 755 /opt/layerfs-wsl/lfs-wsl.sh.new && mv /opt/layerfs-wsl/lfs-wsl.sh.new /opt/layerfs-wsl/lfs-wsl.sh
 for f in server.mjs page.js index.html; do tr -d '\r' < "$REPO/ui/$f" > "$ROOT/ui/$f"; done
 [ -e "$ROOT/fixtures/hello" ] || { cp -r "$REPO/fixtures/hello" "$ROOT/fixtures/hello"; find "$ROOT/fixtures/hello" -type f -exec sed -i 's/\r$//' {} +; }
-echo "bridge /opt/layerfs-wsl/lfs-wsl.sh, page $ROOT/ui, fixture $ROOT/fixtures/hello"
-# existing clients are brought up to this command (idempotent): one made by an older one (for
-# example under the layerfs-bridge name, with its state folder) is made again, and a project that
-# had a page gets it back; `up` refuses while that project's Sandboxes still run
-for p in $(docker ps -a --filter label=lfsb.project --format '{{.Label "lfsb.project"}}'); do
+echo "command /opt/layerfs-wsl/lfs-wsl.sh, page $ROOT/ui, fixture $ROOT/fixtures/hello"
+for p in $stale; do
   id=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "lfsb-$p" | sed -n 's/^LAYERFS_IMAGE=//p')
   tag=$(docker image inspect --format '{{join .RepoTags "\n"}}' "$id" 2>/dev/null | grep -m1 '^lfsb-' || true)
   [ -n "$tag" ] || { echo "$p: no lfsb-* tag for its image $id; run: lfs-wsl.sh up $p <image>"; continue; }
   /opt/layerfs-wsl/lfs-wsl.sh up "$p" "$tag" </dev/null
-  if awk -v p="$p" '$1 == p { f = 1 } END { exit !f }' "$ROOT/ui-ports" 2>/dev/null; then /opt/layerfs-wsl/lfs-wsl.sh ui "$p" </dev/null; fi
+  case " $pages " in *" $p "*) /opt/layerfs-wsl/lfs-wsl.sh ui "$p" </dev/null ;; esac
 done
 
 # an install of this project under its old name (omp-layerfs): its projects move to the new names
