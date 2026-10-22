@@ -763,11 +763,11 @@ export default function layerfs(pi: ExtensionAPI) {
 	});
 
 	const USAGE =
-		"usage: /layerfs init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop | export <linux-dest-dir> | rotate [new-project] | remove <project> | projects";
+		"usage: /layerfs init <project> <image> <linux-src-dir> [distro] | status | down | log [n] | agents | ui [port] | ui stop | export <linux-dest-dir> | rotate [new-project] | remove <project> | projects";
 
 	pi.registerCommand("layerfs", {
 		description:
-			"LayerFS project of this folder: init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop | export <linux-dest-dir> | rotate [new-project] | remove <project> | projects (every project in the distro)",
+			"LayerFS project of this folder: init <project> <image> <linux-src-dir> [distro] | status | down | log [n] | agents | ui [port] | ui stop | export <linux-dest-dir> | rotate [new-project] | remove <project> | projects (every project in the distro)",
 		handler: async (args, ctx) => {
 			const [sub, ...rest] = String(args ?? "").trim().split(/\s+/).filter(Boolean);
 			const show = (text: string, ok: boolean) => {
@@ -778,12 +778,15 @@ export default function layerfs(pi: ExtensionAPI) {
 			};
 			try {
 				if (sub === "init") {
-					if (rest.length !== 3) throw new Error("usage: /layerfs init <project> <image> <linux-src-dir>");
-					const [project, image, src] = rest;
-					let distro = DEFAULT_DISTRO;
-					try {
-						distro = readBinding(ctx.cwd).distro;
-					} catch {}
+					if (rest.length !== 3 && rest.length !== 4)
+						throw new Error("usage: /layerfs init <project> <image> <linux-src-dir> [distro]");
+					const [project, image, src, named] = rest;
+					// the distro: as named, else the folder's current binding's, else the default
+					let distro = named ?? DEFAULT_DISTRO;
+					if (!named)
+						try {
+							distro = readBinding(ctx.cwd).distro;
+						} catch {}
 					const r = await bridge(distro, ["init", project, image, src]);
 					if (r.code === 0) {
 						const file = bindingFile(ctx.cwd);

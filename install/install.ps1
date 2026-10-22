@@ -7,7 +7,8 @@ Run again to resume or repair; finished steps are skipped.
 
   powershell -ExecutionPolicy Bypass -File install\install.ps1 [-Distro layerfs-lab] [-Location D:\wsl\layerfs-lab] [-FromSource] [-NoPlugin]
 
--Distro other than layerfs-lab: name it in each folder's .omp/layerfs.json ("distro").
+-Distro other than layerfs-lab: /layerfs init takes it as its last argument and writes it
+into the folder's .omp/layerfs.json, which every later call follows.
 -FromSource builds the LayerFS core bundle (a release cargo build, tens of minutes)
 instead of downloading this repository's release asset.
 #>
@@ -50,4 +51,6 @@ if (-not $NoPlugin) {
 	& omp plugin link $repo
 	if ($LASTEXITCODE -ne 0) { throw "omp plugin link exited $LASTEXITCODE" }
 }
-Write-Host "done: bind a folder with  /layerfs init hello omp-lfs-rust-sandbox:2 /root/omp-layerfs/fixtures/hello"
+$distroArg = if ($Distro -ne "layerfs-lab") { " $Distro" } else { "" }
+Write-Host "done. In OMP, bind a folder to a new project with:"
+Write-Host "  /layerfs init hello omp-lfs-rust-sandbox:2 /root/omp-layerfs/fixtures/hello$distroArg"
