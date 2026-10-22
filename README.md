@@ -37,7 +37,7 @@ Two LayerFS versions are in use, each pinned:
 
 ## Install
 
-Needs Windows with WSL 2 and OMP. From a clone of this repository, in PowerShell:
+Needs x86_64 Windows with WSL 2 and OMP. From a clone of this repository, in PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install\install.ps1
@@ -55,13 +55,15 @@ the bridge, the page and the `hello` fixture. Finished steps are skipped, so run
 resumes or repairs an install. It ends with the `/layerfs init` line to run in OMP; for a
 distro other than `layerfs-lab`, that line names it as its last argument.
 
-Tested from a fresh clone into a new distro (with `-NoPlugin`, as this machine's plugin was
-already linked to another checkout): about 4 minutes, then `/layerfs init`, an OMP agent's
-fork / `cargo test` / non-fast-forward merge loop and the page all worked. All WSL 2 distros
-share one network namespace, so two distros must not run their own dockerd at the same time:
-both would claim `docker0`. `distro-setup.sh` stops when a `docker0` exists before its distro's
-dockerd first ran; stop the other distro's dockerd for as long as this one runs, then pass
-`-SharedNetworkOk`. The test ran while `layerfs-lab`'s dockerd was stopped.
+Tested twice from a fresh clone into a new distro. With `be861ff` and `-NoPlugin`: about
+4 minutes, then `/layerfs init`, an OMP agent's fork / `cargo test` / non-fast-forward merge
+loop and the page all worked. With `4780392` and the plugin link: without `-SharedNetworkOk`
+it stopped at the `docker0` check below; with it, it finished and linked the plugin, and
+`/layerfs init`, an OMP agent's fork / edit / `cargo test` and the page worked. All WSL 2
+distros share one network namespace, so two distros must not run their own dockerd at the
+same time: both would claim `docker0`. `distro-setup.sh` stops when a `docker0` exists before
+its distro's dockerd first ran; stop the other distro's dockerd for as long as this one runs,
+then pass `-SharedNetworkOk`. Both tests ran while `layerfs-lab`'s dockerd was stopped.
 
 What the bridge expects in the distro (`distro-setup.sh` provides all of it): Docker, the client
 image `layerfs-352-runtime:node24` (built from the core checkout's

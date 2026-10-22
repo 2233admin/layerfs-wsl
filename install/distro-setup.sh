@@ -36,6 +36,7 @@ die() { echo "distro-setup: $*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "run as root (wsl -u root)"
 [ -f /etc/arch-release ] || die "this script sets up an Arch Linux distro"
+[ "$(uname -m)" = x86_64 ] || die "x86_64 only: the core bundle and the Sandbox images are built for it"
 [ "$(cat /proc/1/comm)" = systemd ] || die "systemd is not PID 1: add [boot] systemd=true to /etc/wsl.conf, run wsl --terminate <distro>, then run this again"
 
 step "packages"
