@@ -2,6 +2,7 @@
   "name": "omp-layerfs",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "LayerFS Branches, Workspaces and merges for OMP agents, through a WSL bridge",
   "type": "module",
   "keywords": ["omp-plugin", "omp-extension"],

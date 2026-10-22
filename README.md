@@ -17,6 +17,15 @@ commit, merge and publish through the LayerFS JS SDK, which runs in a WSL distro
 - `ui/`: the LayerFS page (DSH's Work/History view) of one project, served from its client
   container; see [The LayerFS page](#the-layerfs-page).
 
+Only `extension/` is OMP's. The bridge is a plain command (`lfs-bridge.sh <subcommand>`, one
+`docker exec` per call; `cli` and `script` take a trace id `<project>.<session>` the caller picks), so any agent harness
+that can run a command can drive LayerFS through it, and the page shows whichever sessions
+wrote traces.
+
+Built and checked against LayerFS `5fb68dd` (the checkout at `/root/layerfs`). The page runs
+DSH host modules (`route.js`, `Collector`, `TreeReader`) and the view unbuilt from that
+checkout, so a LayerFS checkout whose `dsh/packages` internals moved can break it.
+
 ## Install
 
 Prerequisites in the distro (default `layerfs-lab`): Docker, the LayerFS checkout at
@@ -288,8 +297,8 @@ JSON-only and same-origin. `?pane=work`, `?pane=history` or `?pane=sandboxes` op
   `bash.patterns` rules do not apply to either tool.
 - The LayerFS page has no sign-in: anything that reaches `localhost:<port>` (in the distro
   or on Windows) can read the project's History, Files and Store figures. It answers only
-  reads with a localhost `Host`; DSH's writes on the same routes (Init, removal, Sandbox
-  actions) are refused.
+  reads with a localhost `Host`, plus the Sandboxes pane's same-origin JSON actions on
+  `POST /layerfs/project/<p>/runtime`; DSH's other writes (Init, removal) are refused.
 
 ## Type check
 
@@ -297,3 +306,8 @@ JSON-only and same-origin. `?pane=work`, `?pane=history` or `?pane=sandboxes` op
 scratch folder (`npm i @oh-my-pi/pi-coding-agent@<omp version> typescript @types/node`) and
 run `tsc` there with a tsconfig whose `files` names `extension/index.ts` and whose `paths`
 maps `@oh-my-pi/pi-coding-agent` to `node_modules/@oh-my-pi/pi-coding-agent/dist/types/index.d.ts`.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Parts of `ui/` are ported from or load LayerFS's `dsh/packages`
+(MIT, Copyright (c) 2026 Ephemeral-AI); its notice is in LICENSE.
