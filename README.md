@@ -311,4 +311,4 @@ maps `@oh-my-pi/pi-coding-agent` to `node_modules/@oh-my-pi/pi-coding-agent/dist
 ## License
 
 MIT, see [LICENSE](LICENSE). Parts of `ui/` are ported from or load LayerFS's `dsh/packages`
-(MIT, Copyright (c) 2026 Ephemeral-AI); its notice is in LICENSE.
+(MIT, Copyright (c) 2026 Ephemeral-AI); its notice is in [NOTICE](NOTICE).
