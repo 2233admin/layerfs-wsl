@@ -335,6 +335,40 @@ function projectSwitcher(root, name) {
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") read(); });
 }
 
+/**
+ * The light/dark switch at the strip's end. index.html set the theme on <html> before the view
+ * drew: the viewer's last pick, else the system's. A pick is kept in the cookie "lfs-theme" (a
+ * cookie ignores the port, so every project's page shares it; localStorage would be one per port);
+ * with none kept the page follows the system as it changes.
+ */
+function themeSwitch(root) {
+  const html = document.documentElement, sys = matchMedia("(prefers-color-scheme: dark)");
+  const kept = () => /(?:^|; )lfs-theme=(dark|light)/.exec(document.cookie)?.[1];
+  const SUN = `<svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="2.6"/><path d="M7 1v1.6M7 11.4V13M1 7h1.6M11.4 7H13M2.8 2.8l1.1 1.1M10.1 10.1l1.1 1.1M2.8 11.2l1.1-1.1M10.1 3.9l1.1-1.1"/></svg>`;
+  const MOON = `<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M11.8 8.6A5 5 0 0 1 5.4 2.2a5 5 0 1 0 6.4 6.4Z"/></svg>`;
+  const el = document.createElement("button");
+  el.className = "lfs-theme lfs-own";
+  el.type = "button";
+  const draw = () => {
+    const dark = html.dataset.theme === "dark";
+    el.innerHTML = dark ? SUN : MOON; // the icon shows what a click turns to
+    el.title = dark ? "Light" : "Dark";
+    el.setAttribute("aria-label", dark ? "Switch to light" : "Switch to dark");
+  };
+  const set = (theme) => { html.dataset.theme = theme; draw(); };
+  el.addEventListener("click", (e) => {
+    e.stopPropagation(); // nothing of the view's in here
+    const next = html.dataset.theme === "dark" ? "light" : "dark";
+    document.cookie = `lfs-theme=${next}; path=/; max-age=31536000; SameSite=Lax`;
+    set(next);
+  });
+  sys.addEventListener("change", (e) => { if (!kept()) set(e.matches ? "dark" : "light"); });
+  const place = () => { const strip = root.querySelector(".lfs-strip"); if (strip && strip.lastElementChild !== el) strip.append(el); };
+  draw();
+  place();
+  new MutationObserver(place).observe(root, { childList: true, subtree: false });
+}
+
 // ---------------------------------------------------------------- the board
 const message = document.getElementById("message");
 const say = (text) => { message.textContent = text; message.hidden = !text; };
@@ -358,6 +392,7 @@ async function main() {
   const b = createView(root, { avatars: heroAvatars((k) => `/dsh/packages/view/src/skins/heroes/images/${k}.png`), files: FM, lineDiff: M.lineDiff, live: false, lead: "main" });
   sandboxesView(root, name, pane === "sandboxes");
   projectSwitcher(root, name);
+  themeSwitch(root);
   let soon;
   b.rerender = () => { clearTimeout(soon); soon = setTimeout(() => b.W && b.render(), 40); };
   const files = createFilesSource((kind, query) => call(`${P(name)}/${kind}?${filesQuery(query)}`), () => b.rerender());

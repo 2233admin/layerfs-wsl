@@ -246,6 +246,13 @@ processes, with Unmount / Discard… and Stop… (disabled while an agent's call
 Workspace); it is the server's only write route, `POST /layerfs/project/<p>/runtime`,
 JSON-only and same-origin. `?pane=work`, `?pane=history` or `?pane=sandboxes` opens a view.
 
+- **Light or dark:** the switch at the strip's right end flips the page. DSH's view is
+  light only (both of its skins, heroes and maids), so the dark look is the page's own:
+  `ui/index.html` redraws the heroes skin's colour variables under
+  `:root[data-theme="dark"]` and overrides each of the view's rules that paints a light
+  colour of its own. A pick is kept in the `lfs-theme` cookie, which every project's page
+  shares (cookies ignore the port); with none, the page follows the system's
+  `prefers-color-scheme`.
 - Every OMP session with a trace file on the project is one agent. The extension writes
   `<project>.<session-id>.meta.json` beside each trace (`parent`: the spawning session, null
   for a conversation's root; `agent`, `name`: the subagent's agent and task name). The most
@@ -263,7 +270,7 @@ JSON-only and same-origin. `?pane=work`, `?pane=history` or `?pane=sandboxes` op
   in the client container.
 - The page's own glue (`ui/page.js`) is the DSH client plugin's TypeScript (`replay.ts`,
   `playback.ts`, `storage.ts`, `LayerFsView.tsx`'s board) in plain JS without React.
-  The DSH plugin's Setup, Init, project removal and Sandboxes tab are not part of it.
+  The DSH plugin's Setup, Init and project removal are not part of it.
 
 ## Security
 

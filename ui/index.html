@@ -54,7 +54,91 @@
     .lfs .lfs-proj { display: inline-flex; align-items: center; gap: 6px; flex: none; margin: 0 10px 0 2px; font: 11px var(--mono); color: var(--text-3); }
     .lfs .lfs-proj select { height: 24px; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--text); font: 12px var(--mono); cursor: pointer; }
     .lfs .lfs-proj select:hover, .lfs .lfs-proj select:focus-visible { border-color: var(--accent); outline: none; }
+    /* the light/dark switch at the strip's end (page.js themeSwitch) */
+    .lfs .lfs-theme { flex: none; align-self: flex-end; height: 30px; min-width: 30px; margin: 0 0 8px 8px; padding: 0 8px; border: 1px solid var(--line); background: var(--card); color: var(--text-2); font: 11.5px var(--mono); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+    .lfs .lfs-theme:hover, .lfs .lfs-theme:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
+    .lfs .lfs-theme svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; }
+
+    /* Dark: the DSH view's heroes tokens (skins/heroes/style.js, light only) redrawn, then each of its
+       rules (style.js) that paints a light colour of its own instead of a token. :root[data-theme] is set
+       before the view draws (the script below), so the page never flashes light. */
+    :root[data-theme="dark"] { color-scheme: dark; background: #15171C; }
+    :root[data-theme="dark"] #message { color: #8B919C; }
+    :root[data-theme="dark"] .lfs {
+      --paper: #15171C; --dot: #24272E; --line: #30343C; --line2: #272A31; --tab: #1B1E24; --lane: #1A2130;
+      --trunk: #6DB04A; --green-dark: #8FCB6C; --twig: #5C5952; --coral: #E8876A; --coral-text: #F2A387; --coral-pale: #3A2620;
+      --window: #15171C; --chrome: #1B1E24; --card: #1E2128; --well: #272A31; --grid-bg: #15171C;
+      --text: #E4E7EC; --text-2: #A7ADB8; --text-3: #7D828C; --sep: #272A31; --sep-strong: #30343C;
+      --accent: #7AA2EC; --accent-bg: #1F2B44; --green: #4FB98A; --orange: #E0AA45; --red: #E5654E; --purple: #A88DE2;
+      --orange-bg: rgba(224,170,69,.16); --purple-bg: rgba(168,141,226,.16); --red-bg: #3A2620; --green-bg: rgba(79,185,138,.16);
+      --term: #181B20; --term-head: #1E2128; --term-border: #30343C; --term-text: #E4E7EC; --term-dim: #878C96;
+      --t-blue: #84A9EE; --t-green: #62C79A; --t-orange: #E5B55E; --t-red: #F28C6E; --t-purple: #B89EEB; --t-cyan: #5DBBC8;
+      --t-add-bg: rgba(98,199,154,.12); --t-del-bg: rgba(242,140,110,.12);
+      --b0: #E8876A; --b1: #4FB98A; --b2: #A88DE2; --b3: #E0AA45; --b4: #45ADBD; --b5: #DC7095;
+      color-scheme: dark;
+    }
+    :root[data-theme="dark"] .lfs .tab:hover { background: rgba(255,255,255,.05); }
+    :root[data-theme="dark"] .lfs .tab[aria-selected="true"],
+    :root[data-theme="dark"] .lfs .ctl, :root[data-theme="dark"] .lfs .board, :root[data-theme="dark"] .lfs .bcard,
+    :root[data-theme="dark"] .lfs .tile, :root[data-theme="dark"] .lfs .wchip.on { background: var(--card); }
+    :root[data-theme="dark"] .lfs .tab .tchip:not(.ro):not(.bad) { background: var(--well); color: var(--text-2); }
+    :root[data-theme="dark"] .lfs .wtag.grey, :root[data-theme="dark"] .lfs .crow .dt:not(.warn) { background: var(--well); }
+    :root[data-theme="dark"] .lfs .ctl button.on, :root[data-theme="dark"] .lfs .seg button.on,
+    :root[data-theme="dark"] .lfs .tkey.on { color: var(--paper); }
+    :root[data-theme="dark"] .lfs .hcard .cbtn:hover, :root[data-theme="dark"] .lfs .sbx button.primary,
+    :root[data-theme="dark"] .lfs .sbx button.primary:hover:not(:disabled) { color: #0E1116; }
+    :root[data-theme="dark"] .lfs .bhead, :root[data-theme="dark"] .lfs .bcard .bhd .note,
+    :root[data-theme="dark"] .lfs .tile span { color: var(--text-2); }
+    :root[data-theme="dark"] .lfs .floor { background: #1D1B17 radial-gradient(#2E2A22 1px, transparent 1px) 0 0 / 12px 12px; }
+    :root[data-theme="dark"] .lfs .floor .none { color: #B79A64; }
+    :root[data-theme="dark"] .lfs .pool { border-top-color: #3A3429; background: #24211B; color: #B79A64; }
+    :root[data-theme="dark"] .lfs .bcard .bhd { background: color-mix(in srgb, var(--bc) 16%, var(--card)); }
+    :root[data-theme="dark"] .lfs .bcard .bhd .nm { color: color-mix(in srgb, var(--bc) 70%, white); }
+    :root[data-theme="dark"] .lfs .crow .st { background: color-mix(in srgb, var(--ac) 20%, var(--card)); color: color-mix(in srgb, var(--ac) 70%, white); }
+    :root[data-theme="dark"] .lfs .crow.off .st { background: var(--well); color: var(--text-3); }
+    :root[data-theme="dark"] .lfs .crow[data-dws]:hover { background: color-mix(in srgb, var(--bc) 12%, var(--card)); }
+    :root[data-theme="dark"] .lfs .wchip.on .st { color: color-mix(in srgb, var(--ac) 70%, white); }
+    :root[data-theme="dark"] .lfs .fico.badge { background: color-mix(in srgb, var(--fc) 22%, var(--card)); }
+    :root[data-theme="dark"] .lfs .sbc { border-color: #34405A; }
+    :root[data-theme="dark"] .lfs .sbar2 { background: #262C38; }
+    :root[data-theme="dark"] .lfs .sbar2 .f { background: #4A5262; }
+    :root[data-theme="dark"] .lfs .sv2 .hd { background: #9C9A94; }
+    :root[data-theme="dark"] .lfs .sv2 .fc { background: #4A4842; }
+    :root[data-theme="dark"] .lfs .sv2 .md, :root[data-theme="dark"] .lfs .sv2 .ot { background: #6E6C66; }
+    :root[data-theme="dark"] .lfs svg.tree .grid { stroke: var(--line2); }
+    :root[data-theme="dark"] .lfs svg.tree .band, :root[data-theme="dark"] .lfs svg.tree .mbadge circle { stroke: var(--card); }
+    :root[data-theme="dark"] .lfs svg.tree .ring, :root[data-theme="dark"] .lfs svg.tree .tag.idle rect { fill: var(--card); }
+    :root[data-theme="dark"] .lfs svg.tree .ground { fill: #1D1B17; }
+    :root[data-theme="dark"] .lfs svg.tree .groundline { stroke: #3A3429; }
+    :root[data-theme="dark"] .lfs .ovstrip { background: var(--term); }
+    :root[data-theme="dark"] .lfs .ovs .bar { fill: #3E3B35; }
+    :root[data-theme="dark"] .lfs .ovbox { background: rgba(122,162,236,.12); }
+    :root[data-theme="dark"] .lfs .tzoom { background: rgba(30,33,40,.92); }
+    :root[data-theme="dark"] .lfs .tlegend rect { stroke: var(--card) !important; } /* history.js LEGEND: an inline stroke:#fff */
+    :root[data-theme="dark"] .lfs .tlegend circle[fill="#fff"] { fill: var(--card); }
+    :root[data-theme="dark"] .lfs .frow:hover { background: var(--well); }
+    :root[data-theme="dark"] .lfs .frow .ind { background: repeating-linear-gradient(90deg, transparent 0 6px, var(--line2) 6px 7px, transparent 7px 14px); }
+    :root[data-theme="dark"] .lfs .cl:hover { background: rgba(255,255,255,.04); }
+    :root[data-theme="dark"] .lfs .cl .no { color: #5F646D; }
+    :root[data-theme="dark"] .lfs .hl-com { color: #7D838D; }
+    :root[data-theme="dark"] .lfs .hl-str { color: #62C79A; }
+    :root[data-theme="dark"] .lfs .hl-num, :root[data-theme="dark"] .lfs .hl-lit { color: #F2A387; }
+    :root[data-theme="dark"] .lfs .hl-kw { color: #B89EEB; }
+    :root[data-theme="dark"] .lfs .hl-fn { color: #84A9EE; }
+    :root[data-theme="dark"] .lfs .hl-typ, :root[data-theme="dark"] .lfs .hl-var { color: #5DBBC8; }
+    :root[data-theme="dark"] .lfs .hl-prop, :root[data-theme="dark"] .lfs .hl-attr { color: #E5B55E; }
+    :root[data-theme="dark"] .lfs .hl-tag { color: #F28C6E; }
+    :root[data-theme="dark"] .lfs .hl-op { color: #E0AA45; }
+    /* the LayerFS mark's dark blue (view.js LOGO, presentation attributes) in the dark accent */
+    :root[data-theme="dark"] .lfs [fill="#2F5BB5"] { fill: var(--accent); }
+    :root[data-theme="dark"] .lfs [stroke="#2F5BB5"] { stroke: var(--accent); }
   </style>
+  <script>
+    // the viewer's pick (page.js themeSwitch keeps it in a cookie: cookies ignore the port, so every
+    // project's page shares it), else the system's; set before anything draws
+    (() => { const t = /(?:^|; )lfs-theme=(dark|light)/.exec(document.cookie)?.[1];
+      document.documentElement.dataset.theme = t || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); })();
+  </script>
   <!-- the simulator's file helpers the view draws Files with (UMD: LayerSim, LayerFiles) -->
   <script src="/dsh/sim/simulation_engine/model.js"></script>
   <script src="/dsh/sim/simulation_engine/files.js"></script>
