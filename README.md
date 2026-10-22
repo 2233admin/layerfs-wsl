@@ -37,8 +37,32 @@ Two LayerFS versions are in use, each pinned:
 
 ## Install
 
-Prerequisites in the distro (default `layerfs-lab`): Docker, the client image
-`layerfs-352-runtime:node24`, a sandbox image per project kind, and three LayerFS paths:
+Needs Windows with WSL 2 and OMP. From a clone of this repository, in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install\install.ps1
+```
+
+`install\install.ps1` creates the Arch Linux WSL distro `layerfs-lab` (`-Distro`, `-Location`
+choose another name and folder; default `%USERPROFILE%\wsl\<distro>`) with systemd on, runs
+`install/distro-setup.sh` in it as root, and links this checkout as the OMP plugin (`-NoPlugin`
+skips that). `distro-setup.sh` installs Docker (the distro's own dockerd), clones LayerFS to
+`/root/layerfs-upstream` with the two pinned worktrees, downloads the core bundle from this
+repository's release [`core-e49d1613f`](https://github.com/2233admin/omp-layerfs/releases/tag/core-e49d1613f)
+(sha256-checked; `-FromSource` builds it instead with `bridge/build-bundle.sh`, a release
+cargo build of tens of minutes), builds the client image and both Sandbox images, and installs
+the bridge, the page and the `hello` fixture. Finished steps are skipped, so running it again
+resumes or repairs an install. It ends with the `/layerfs init` line to run in OMP; for a
+distro other than `layerfs-lab`, that line names it as its last argument.
+
+Tested from a fresh clone into a new distro: about 4 minutes, then `/layerfs init`, an OMP
+agent's fork / `cargo test` / non-fast-forward merge loop and the page all worked. All WSL 2
+distros share one network namespace, so two distros must not run their own dockerd at the same
+time: both would claim `docker0`. That test ran while `layerfs-lab`'s dockerd was stopped.
+
+What the bridge expects in the distro (`distro-setup.sh` provides all of it): Docker, the client
+image `layerfs-352-runtime:node24` (built from the core checkout's
+`dsh/tools/history/runtime`), a sandbox image per project kind, and three LayerFS paths:
 
 | Variable | Default | Holds |
 |---|---|---|
@@ -55,11 +79,8 @@ client image.
 
 `bridge/build-bundle.sh <rev>` builds the bundle: a release build in `rust:1.85.1-bookworm`
 (the addon then needs glibc 2.34 at most, which the client image has) from a worktree of
-`/root/layerfs-upstream` at `<rev>`, with `COMMIT` written beside the binaries:
-
-```powershell
-wsl -d layerfs-lab -- bash -c "tr -d '\r' < bridge/build-bundle.sh | bash -s e49d1613f"
-```
+`/root/layerfs-upstream` at `<rev>`, with `COMMIT` written beside the binaries (`JOBS` caps
+cargo's jobs, default 8).
 
 Sandbox images: `bridge/rust-sandbox.Dockerfile` (`omp-lfs-rust-sandbox:2`, incremental
 Cargo builds; the recipe explains why it must match the host's toolchain) and
@@ -72,39 +93,34 @@ For OMP, set the same two variables on Windows and list them in `WSLENV`
 (`OMP_LFS_BUNDLE/u:OMP_LFS_CHECKOUT/u`); this OMP route has not been run yet. Stores written
 by either core open on the other (tested both ways on copies of real Stores).
 
-Install the bridge and the page (from this folder, PowerShell):
+After changing `bridge/` or `ui/` in this checkout, install them again (from this folder):
 
 ```powershell
-wsl -d layerfs-lab -- bash -c "mkdir -p /opt/omp-layerfs && tr -d '\r' < bridge/lfs-bridge.sh > /opt/omp-layerfs/lfs-bridge.sh && chmod 755 /opt/omp-layerfs/lfs-bridge.sh"
-wsl -d layerfs-lab -- bash -c "mkdir -p /root/omp-layerfs/ui && cp ui/server.mjs ui/page.js ui/index.html /root/omp-layerfs/ui/"
+wsl -d layerfs-lab -- bash -c "tr -d '\r' < bridge/lfs-bridge.sh > /opt/omp-layerfs/lfs-bridge.sh"
+wsl -d layerfs-lab -- bash -c "cp ui/server.mjs ui/page.js ui/index.html /root/omp-layerfs/ui/"
 ```
 
-Install the extension as a user-scoped OMP plugin. The repository root is the plugin
-package (`package.json`, `"omp": { "extensions": ["./extension/index.ts"] }`); `link`
-junctions it into `~/.omp/plugins/node_modules/omp-layerfs`, so edits to this checkout take
-effect in the next session:
-
-```powershell
-omp plugin link E:\projects\omp-layerfs
-omp plugin list                      # shows omp-layerfs@0.1.0
-```
-
-Every OMP session then loads it, and any folder with `.omp/layerfs.json` works without
-`-e`, e.g. from `e2e/`: `omp -p "/layerfs status" < NUL` prints `hello`'s Branches (in
-`--mode json` the text arrives as a `layerfs` custom message). `omp plugin disable
-omp-layerfs` / `omp plugin enable omp-layerfs` turn it off and on. Passing
-`-e E:\projects\omp-layerfs\extension\index.ts` as well still loads it once.
+The plugin: the repository root is the plugin package (`package.json`,
+`"omp": { "extensions": ["./extension/index.ts"] }`); `omp plugin link <this folder>` (done by
+`install.ps1`) junctions it into `~/.omp/plugins/node_modules/omp-layerfs`, so edits to this
+checkout take effect in the next session. `omp plugin list` shows `omp-layerfs@0.1.0`; `omp
+plugin disable omp-layerfs` / `omp plugin enable omp-layerfs` turn it off and on. Every OMP
+session loads it, and any folder with `.omp/layerfs.json` works without `-e`, e.g. from `e2e/`:
+`omp -p "/layerfs status" < NUL` prints `hello`'s Branches (in `--mode json` the text arrives
+as a `layerfs` custom message).
 
 ## Use
 
 Bind a folder to a project (copies a distro folder into a new LayerFS Store once):
 
 ```text
-/layerfs init hello omp-lfs-rust-sandbox:2 /root/omp-layerfs/fixtures/hello
+/layerfs init hello omp-lfs-rust-sandbox:2 /root/omp-layerfs/fixtures/hello [distro]
 ```
 
 This writes `.omp/layerfs.json` (`{ "distro", "project", "image" }`) in the folder;
-without it the tools refuse. `/layerfs status` lists Branches, `/layerfs down` stops the
+without it the tools refuse. The distro is the one named, else the folder's previous
+binding's, else `layerfs-lab`; every later call follows the binding. `/layerfs status` lists
+Branches, `/layerfs down` stops the
 client container (the Store volume stays). `/layerfs projects` lists every project in the
 distro ([All projects](#all-projects)). `/layerfs export`, `/layerfs rotate` and
 `/layerfs remove` are in [Rotating a project's Store](#rotating-a-projects-store).

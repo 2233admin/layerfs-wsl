@@ -421,9 +421,11 @@ EOF
 # The page's server (ui/server.mjs, installed under $ROOT/ui) runs detached in
 # the client; its pid, port and log are in the client's /tmp.
 UI_PID=/tmp/omp-lfs-ui.pid UI_PORT=/tmp/omp-lfs-ui.port UI_LOG=/tmp/omp-lfs-ui.log
-# The pid of the client's running page server, if any.
+# The pid of the client's running page server, if any. The pid file outlives a container
+# restart, after which its pid can be this very check (whose command line names
+# server.mjs too), so the process must also be node.
 ui_pid() {
-  docker exec "$1" sh -c "p=\$(cat $UI_PID 2>/dev/null) && grep -q server.mjs /proc/\$p/cmdline 2>/dev/null && echo \$p" || true
+  docker exec "$1" sh -c "p=\$(cat $UI_PID 2>/dev/null) && case \$(readlink /proc/\$p/exe) in */node) ;; *) exit 0 ;; esac && grep -q server.mjs /proc/\$p/cmdline 2>/dev/null && echo \$p" || true
 }
 
 # ui-ports: one "<project> <port>" line per project whose page was started, kept
