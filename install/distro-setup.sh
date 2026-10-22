@@ -1,13 +1,14 @@
 #!/bin/bash
-# distro-setup.sh [--from-source] [--shared-network-ok]: set up omp-layerfs in an Arch Linux
-# WSL distro, as root.
+# distro-setup.sh [--from-source]: set up omp-layerfs in an Arch Linux or Ubuntu (22.04 or
+# later; tested on 24.04) WSL distro, as root.
 # Run from this checkout (install.ps1 does); every step is skipped when already done, so
 # running it again resumes or repairs an install.
 #
-# It installs Docker (the distro's own dockerd, under systemd), the two LayerFS checkouts
-# the bridge pins, the LayerFS core bundle (downloaded from this repository's release, or
-# built with --from-source), the client image, both Sandbox images, the bridge, the page
-# and the hello fixture. Paths are the bridge's and the extension's defaults.
+# It installs Docker (the distro's own dockerd, under systemd) on the distro's own container
+# network (install/lfs-net.sh), the two LayerFS checkouts the bridge pins, the LayerFS core
+# bundle (downloaded from this repository's release, or built with --from-source), the client
+# image, both Sandbox images, the bridge, the page and the hello fixture. Paths are the
+# bridge's and the extension's defaults.
 set -euo pipefail
 
 CORE_REV=e49d1613f075c1e945d85adb8853fbfe9e7be7eb   # core and SDK (upstream 2e5061798 + PR #409)
@@ -23,33 +24,93 @@ ROOT=/root/omp-layerfs RUNTIME_IMAGE=layerfs-352-runtime:node24
 RUST_IMAGE=omp-lfs-rust-sandbox:2 NODE_IMAGE=omp-lfs-node-sandbox:3
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
 
-from_source=0 shared_ok=0
+from_source=0
 for a in "$@"; do
   case $a in
     --from-source) from_source=1 ;;
-    --shared-network-ok) shared_ok=1 ;;
-    *) echo "usage: distro-setup.sh [--from-source] [--shared-network-ok]" >&2; exit 64 ;;
+    *) echo "usage: distro-setup.sh [--from-source]" >&2; exit 64 ;;
   esac
 done
 step() { printf '\n== %s\n' "$*"; }
 die() { echo "distro-setup: $*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "run as root (wsl -u root)"
-[ -f /etc/arch-release ] || die "this script sets up an Arch Linux distro"
 [ "$(uname -m)" = x86_64 ] || die "x86_64 only: the core bundle and the Sandbox images are built for it"
 [ "$(cat /proc/1/comm)" = systemd ] || die "systemd is not PID 1: add [boot] systemd=true to /etc/wsl.conf, run wsl --terminate <distro>, then run this again"
+. /etc/os-release
+case $ID in
+  arch) ;;
+  ubuntu) [ "${VERSION_ID%%.*}" -ge 22 ] || die "Ubuntu $VERSION_ID: 22.04 or later is needed" ;;
+  *) die "this script sets up an Arch Linux or Ubuntu distro, not $ID" ;;
+esac
 
 step "packages"
-[ -s /etc/pacman.d/gnupg/trustdb.gpg ] || { pacman-key --init; pacman-key --populate archlinux; }
-pacman -Syu --noconfirm --needed git docker curl iproute2
-# All WSL 2 distros share one network namespace. A docker0 there before this distro's dockerd
-# ever ran belongs to another distro's dockerd, and a second dockerd would claim it too
-# (containers of both on one bridge, each daemon handing out the same addresses).
-if [ ! -d /var/lib/docker/network ] && ip link show docker0 >/dev/null 2>&1 && [ $shared_ok = 0 ]; then
-  die "docker0 already exists: another WSL distro runs (or ran) its own dockerd. Stop it there (systemctl stop docker.socket docker.service) for as long as this distro's dockerd runs, then run this again with --shared-network-ok (install.ps1 -SharedNetworkOk)"
+if [ "$ID" = arch ]; then
+  [ -s /etc/pacman.d/gnupg/trustdb.gpg ] || { pacman-key --init; pacman-key --populate archlinux; }
+  pacman -Syu --noconfirm --needed git curl iproute2 iptables
+else
+  export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
+  apt() { apt-get -o DPkg::Lock::Timeout=600 -q "$@"; }
+  apt update
+  apt install -y ca-certificates curl git iproute2 iptables
+fi
+
+# All WSL 2 distros share one network namespace, so a dockerd on the default docker0 would
+# join another distro's docker0, and two dockerds managing iptables would fight over the same
+# chains. This distro's dockerd gets a bridge of its own and leaves iptables to lfs-net.sh.
+# The network is set up before Docker is installed: Ubuntu's package starts dockerd at once.
+step "container network"
+install -D -m 755 <(tr -d '\r' < "$REPO/install/lfs-net.sh") /opt/omp-layerfs/lfs-net.sh
+if [ -f /etc/omp-layerfs/net.env ]; then
+  echo "kept: $(tr '\n' ' ' < /etc/omp-layerfs/net.env)"
+elif [ -d /var/lib/docker/network ]; then
+  # an install from before lfs-net.sh, on docker0; moving it would change the bridge under its Sandboxes
+  echo "this distro's dockerd already runs on docker0 (an older install); left as it is"
+elif [ -e /etc/docker/daemon.json ]; then
+  die "/etc/docker/daemon.json exists and was not written by this script; refusing to change a Docker setup it does not own"
+else
+  read -r bridge subnet < <(/opt/omp-layerfs/lfs-net.sh pick)
+  install -D -m 644 /dev/stdin /etc/omp-layerfs/net.env <<<"LFS_BRIDGE=$bridge
+LFS_SUBNET=$subnet"
+  install -D -m 644 /dev/stdin /etc/docker/daemon.json <<<"{\"bridge\": \"$bridge\", \"iptables\": false, \"ip6tables\": false}"
+  echo "bridge $bridge, subnet $subnet"
+fi
+if [ -f /etc/omp-layerfs/net.env ]; then
+  cat > /etc/systemd/system/omp-lfs-net.service <<'EOF'
+[Unit]
+Description=omp-layerfs container network (bridge, forwarding, NAT)
+Before=docker.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/omp-layerfs/lfs-net.sh up
+ExecStop=/opt/omp-layerfs/lfs-net.sh down
+[Install]
+WantedBy=multi-user.target
+EOF
+  install -D -m 644 /dev/stdin /etc/systemd/system/docker.service.d/omp-lfs-net.conf <<'EOF'
+[Unit]
+Requires=omp-lfs-net.service
+After=omp-lfs-net.service
+EOF
+  systemctl daemon-reload
+  systemctl enable --now omp-lfs-net.service
+fi
+
+step "docker"
+if [ "$ID" = arch ]; then
+  pacman -S --noconfirm --needed docker
+elif ! command -v dockerd >/dev/null; then
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" > /etc/apt/sources.list.d/docker.list
+  apt update
+  apt install -y docker-ce docker-ce-cli containerd.io
 fi
 systemctl enable --now docker
-docker version --format 'docker engine {{.Server.Version}}'
+api=$(docker version --format '{{.Server.APIVersion}}')
+docker version --format 'docker engine {{.Server.Version}}, API {{.Server.APIVersion}}'
+[ "$(printf '%s\n1.54\n' "$api" | sort -V | head -1)" = 1.54 ] || die "Docker API $api: the LayerFS core needs 1.54 or later"
 
 step "LayerFS checkouts"
 [ -d "$SRC/.git" ] || git clone --quiet "$UPSTREAM" "$SRC"

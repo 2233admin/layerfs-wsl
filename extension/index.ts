@@ -225,7 +225,8 @@ function bridge(
 		env.WSLENV = env.WSLENV ? `${env.WSLENV}:LFS_TRACE_STEP` : "LFS_TRACE_STEP";
 	}
 	const { promise, resolve, reject } = Promise.withResolvers<BridgeResult>();
-	const child = spawn("wsl.exe", ["-d", distro, "--exec", BRIDGE, ...argv], {
+	// as root: the bridge needs the distro's Docker and /root; an Ubuntu distro may have a default user
+	const child = spawn("wsl.exe", ["-d", distro, "-u", "root", "--exec", BRIDGE, ...argv], {
 		env,
 		windowsHide: true,
 		stdio: ["pipe", "pipe", "pipe"],

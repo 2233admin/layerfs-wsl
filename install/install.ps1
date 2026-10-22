@@ -1,25 +1,27 @@
 <#
 Installs omp-layerfs on Windows:
-  1. an Arch Linux WSL distro (created when missing; systemd on),
-  2. inside it, install/distro-setup.sh: Docker, LayerFS, images, the bridge and the page,
-  3. this checkout as a user-scoped OMP plugin (omp plugin link).
+  1. a WSL distro, Arch Linux or Ubuntu 24.04 (created when missing; systemd on),
+  2. inside it, install/distro-setup.sh: Docker on the distro's own container network,
+     LayerFS, images, the bridge and the page,
+  3. a logon task that keeps the distro running (install/keepalive.ps1),
+  4. this checkout as a user-scoped OMP plugin (omp plugin link).
 Run again to resume or repair; finished steps are skipped.
 
-  powershell -ExecutionPolicy Bypass -File install\install.ps1 [-Distro layerfs-lab] [-Location D:\wsl\layerfs-lab] [-FromSource] [-NoPlugin]
+  powershell -ExecutionPolicy Bypass -File install\install.ps1 [-Distro layerfs-lab] [-Base archlinux|Ubuntu-24.04] [-Location D:\wsl\layerfs-lab] [-FromSource] [-NoPlugin]
 
+-Base picks the Linux of a new distro (default archlinux); an existing distro is used as it is.
 -Distro other than layerfs-lab: /layerfs init takes it as its last argument and writes it
 into the folder's .omp/layerfs.json, which every later call follows.
 -FromSource builds the LayerFS core bundle (a release cargo build, tens of minutes)
 instead of downloading this repository's release asset.
--SharedNetworkOk: start this distro's dockerd although docker0 exists, after stopping the
-dockerd of the other WSL distro that made it (all WSL 2 distros share one network).
 #>
 param(
 	[string]$Distro = "layerfs-lab",
+	[ValidateSet("archlinux", "Ubuntu-24.04")]
+	[string]$Base = "archlinux",
 	[string]$Location,
 	[switch]$FromSource,
-	[switch]$NoPlugin,
-	[switch]$SharedNetworkOk
+	[switch]$NoPlugin
 )
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
@@ -33,8 +35,8 @@ function Invoke-Wsl {
 $have = @(wsl.exe --list --quiet) | ForEach-Object { $_.Trim() } | Where-Object { $_ }
 if ($have -notcontains $Distro) {
 	if (-not $Location) { $Location = Join-Path $env:USERPROFILE "wsl\$Distro" }
-	Write-Host "== creating WSL distro $Distro (Arch Linux) at $Location"
-	Invoke-Wsl --install archlinux --name $Distro --location $Location --no-launch --web-download
+	Write-Host "== creating WSL distro $Distro ($Base) at $Location"
+	Invoke-Wsl --install $Base --name $Distro --location $Location --no-launch --web-download
 }
 
 $pid1 = (wsl.exe -d $Distro -u root --exec cat /proc/1/comm | Out-String).Trim()
@@ -47,8 +49,10 @@ if ($pid1 -ne "systemd") {
 $linuxRepo = (wsl.exe -d $Distro -u root --exec wslpath -a $repo | Out-String).Trim()
 $setup = @("-d", $Distro, "-u", "root", "--exec", "bash", "$linuxRepo/install/distro-setup.sh")
 if ($FromSource) { $setup += "--from-source" }
-if ($SharedNetworkOk) { $setup += "--shared-network-ok" }
 Invoke-Wsl @setup
+
+Write-Host "== keeping $Distro running while you are logged on"
+& (Join-Path $PSScriptRoot "keepalive.ps1") -Distro $Distro
 
 if (-not $NoPlugin) {
 	Write-Host "== linking $repo as the OMP plugin omp-layerfs"
