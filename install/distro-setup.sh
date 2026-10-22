@@ -69,9 +69,10 @@ elif [ -d /var/lib/docker/network ]; then
 elif [ -e /etc/docker/daemon.json ]; then
   die "/etc/docker/daemon.json exists and was not written by this script; refusing to change a Docker setup it does not own"
 else
-  read -r bridge subnet < <(/opt/omp-layerfs/lfs-net.sh pick)
+  read -r bridge subnet id < <(/opt/omp-layerfs/lfs-net.sh pick)
   install -D -m 644 /dev/stdin /etc/omp-layerfs/net.env <<<"LFS_BRIDGE=$bridge
-LFS_SUBNET=$subnet"
+LFS_SUBNET=$subnet
+LFS_ID=$id"
   install -D -m 644 /dev/stdin /etc/docker/daemon.json <<<"{\"bridge\": \"$bridge\", \"iptables\": false, \"ip6tables\": false}"
   echo "bridge $bridge, subnet $subnet"
 fi

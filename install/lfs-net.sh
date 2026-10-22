@@ -6,8 +6,12 @@
 # {"bridge": "<ours>", "iptables": false} (install/distro-setup.sh writes it), and this
 # script provides what Docker's iptables would: the bridge, forwarding and NAT.
 #
-#   pick  print a free "<bridge> <subnet>" (10.77.N.0/24, bridge lfs-10-77-N)
-#   up    create the bridge from /etc/omp-layerfs/net.env and add the rules (idempotent)
+#   pick  print "<bridge> <subnet> <id>" for a new install: a random id, the bridge named
+#         lfs-<id> and a subnet 10.64-127.x.0/24 derived from it (the first one from there no
+#         address or route uses); stored in net.env, they stay this distro's while it is down
+#   up    create the bridge from /etc/omp-layerfs/net.env and add the rules (idempotent);
+#         the bridge carries this distro's id as its alias, and a bridge of that name owned
+#         by another distro is refused, never shared
 #   down  remove the rules and the bridge
 # Run by omp-lfs-net.service before docker.service.
 set -euo pipefail
@@ -50,22 +54,29 @@ rules() { # rules <add|del>
 
 case ${1:-} in
   pick)
-    for n in $(seq 0 255); do
-      ip -o addr show | grep -q " 10\.77\.$n\." && continue
-      ip route show | grep -q "^10\.77\.$n\." && continue
-      ip link show "lfs-10-77-$n" >/dev/null 2>&1 && continue
-      echo "lfs-10-77-$n 10.77.$n.0/24"; exit 0
+    h=$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
+    a=$((64 + 16#${h:8:2} % 64)) b=$((16#${h:10:2}))
+    for i in $(seq 0 255); do
+      net=10.$a.$(((b + i) % 256))
+      ip -o addr show | grep -q " $net\." && continue
+      ip route show | grep -q "^$net\." && continue
+      echo "lfs-${h:0:8} $net.0/24 ${h:0:8}"; exit 0
     done
-    die "no free 10.77.N.0/24"
+    die "no free 10.$a.x.0/24"
     ;;
   up)
     # shellcheck source=/dev/null
     . "$ENV"
+    owner="omp-lfs ${LFS_ID:?no LFS_ID in $ENV}"
     gw=${LFS_SUBNET%.0/24}.1
-    if ! ip link show "$LFS_BRIDGE" >/dev/null 2>&1; then
+    if ip link show "$LFS_BRIDGE" >/dev/null 2>&1; then
+      have=$(cat "/sys/class/net/$LFS_BRIDGE/ifalias" 2>/dev/null || true)
+      [ "$have" = "$owner" ] || die "bridge $LFS_BRIDGE exists but belongs to ${have:-something else} (all WSL 2 distros share one network); not using it"
+    else
       # the subnet must still be free: another network may have taken it while we were down
       if ip route show | grep -q "^${LFS_SUBNET%/24}"; then die "$LFS_SUBNET is in use by another network; pick another (lfs-net.sh pick) into $ENV"; fi
       ip link add "$LFS_BRIDGE" type bridge
+      ip link set "$LFS_BRIDGE" alias "$owner"
     fi
     ip addr show dev "$LFS_BRIDGE" | grep -q " $gw/24" || ip addr add "$gw/24" dev "$LFS_BRIDGE"
     ip link set "$LFS_BRIDGE" up
