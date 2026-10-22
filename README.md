@@ -18,22 +18,58 @@ commit, merge and publish through the LayerFS JS SDK, which runs in a WSL distro
   container; see [The LayerFS page](#the-layerfs-page).
 
 Only `extension/` is OMP's. The bridge is a plain command (`lfs-bridge.sh <subcommand>`, one
-`docker exec` per call), so another agent harness that can run a command could drive LayerFS
-through it the way the extension does; only OMP has been run end to end. `cli` and `script`
-take a trace id `<project>.<session>` (the session of letters, digits, `_` and `-`; any other
-is refused): the page and `remove` find a project's traces by that prefix.
+`docker exec` per call), so another agent harness that can run a command can drive LayerFS
+through it the way the extension does: [Other agent harnesses](docs/other-harnesses.md) has
+the instruction file Claude Code worked with end to end. `cli` and `script` take a trace id
+`<project>.<session>` (the session of letters, digits, `_` and `-`; any other is refused):
+the page and `remove` find a project's traces by that prefix.
 
-Built and checked against LayerFS `5fb68dd` (the checkout at `/root/layerfs`). The page runs
-DSH host modules (`route.js`, `Collector`, `TreeReader`) and the view unbuilt from that
-checkout, so a LayerFS checkout whose `dsh/packages` internals moved can break it.
+Two LayerFS versions are in use, each pinned:
+
+- **Core and SDK: `e49d1613f`**, upstream `2e5061798` plus the merge fix of upstream
+  [PR #409](https://github.com/Ephemeral-AI-Lab/layerfs/pull/409) (branch
+  `fix/merge-binding-kind` of `2233admin/layerfs`). The daemon and native addon come from the
+  bundle `/root/layerfs-next-bundle`, the SDK, operator, `lfs.js` CLI and SDK guide from the
+  checkout `/root/layerfs-next`. Once #409 is merged upstream, move both to an upstream commit.
+- **The page's DSH code: `5fb68dd`** (`/root/layerfs`). The page runs DSH's host modules
+  (`route.js`, `Collector`, `TreeReader`) and view/model code unbuilt from that checkout, so
+  it stays on the commit it was written against; it draws what the newer core writes.
 
 ## Install
 
-Prerequisites in the distro (default `layerfs-lab`): Docker, the LayerFS checkout at
-`/root/layerfs`, the Linux bundle at `/root/layerfs-linux-build` (`layerfs-daemon`,
-`layerfs.node`), the client image `layerfs-352-runtime:node24` and a sandbox image
-(for Rust, `omp-lfs-rust-sandbox:1` from `bridge/rust-sandbox.Dockerfile`). `OMP_LFS_BUNDLE`,
-`OMP_LFS_CHECKOUT`, `OMP_LFS_ROOT` and `OMP_LFS_RUNTIME_IMAGE` override those paths.
+Prerequisites in the distro (default `layerfs-lab`): Docker, the client image
+`layerfs-352-runtime:node24`, a sandbox image per project kind, and three LayerFS paths:
+
+| Variable | Default | Holds |
+|---|---|---|
+| `OMP_LFS_BUNDLE` | `/root/layerfs-next-bundle` | `layerfs-daemon`, `layerfs.node`, and a `COMMIT` file with the commit they were built from |
+| `OMP_LFS_CHECKOUT` | `/root/layerfs-next` | the LayerFS checkout at that commit: SDK, operator, `lfs.js`, SDK guide |
+| `OMP_LFS_UI_CHECKOUT` | `/root/layerfs` | the checkout (5fb68dd) whose DSH host and view code the page runs |
+
+`up` and `init` refuse a bundle whose `COMMIT` is not the checkout's `HEAD` (a bundle
+without `COMMIT` is taken only with `OMP_LFS_CHECKOUT=/root/layerfs`). Each client records
+its three paths (`OMP_LFS_CORE`); `up` recreates a client made for other paths (refused while
+its Sandboxes run), and `cli`, `script`, `export`, `ui` and `rotate` refuse such a client until
+`up` has run. `OMP_LFS_ROOT` and `OMP_LFS_RUNTIME_IMAGE` override the state folder and the
+client image.
+
+`bridge/build-bundle.sh <rev>` builds the bundle: a release build in `rust:1.85.1-bookworm`
+(the addon then needs glibc 2.34 at most, which the client image has) from a worktree of
+`/root/layerfs-upstream` at `<rev>`, with `COMMIT` written beside the binaries:
+
+```powershell
+wsl -d layerfs-lab -- bash -c "tr -d '\r' < bridge/build-bundle.sh | bash -s e49d1613f"
+```
+
+Sandbox images: `bridge/rust-sandbox.Dockerfile` (`omp-lfs-rust-sandbox:2`, incremental
+Cargo builds; the recipe explains why it must match the host's toolchain) and
+`bridge/node-sandbox.Dockerfile` (`omp-lfs-node-sandbox:3`, pnpm projects).
+
+Rollback to the 5fb68dd core is an environment change while the project is idle:
+`OMP_LFS_BUNDLE=/root/layerfs-linux-build OMP_LFS_CHECKOUT=/root/layerfs lfs-bridge.sh up <p>
+omp-lfs-rust-sandbox:1` (the Rust image without incremental builds, see below), then `ui <p>`.
+For OMP, set the same two variables on Windows and list them in `WSLENV`
+(`OMP_LFS_BUNDLE/u:OMP_LFS_CHECKOUT/u`). Stores written by either core open on the other.
 
 Install the bridge and the page (from this folder, PowerShell):
 
@@ -63,7 +99,7 @@ omp-layerfs` / `omp plugin enable omp-layerfs` turn it off and on. Passing
 Bind a folder to a project (copies a distro folder into a new LayerFS Store once):
 
 ```text
-/layerfs init hello omp-lfs-rust-sandbox:1 /root/omp-layerfs/fixtures/hello
+/layerfs init hello omp-lfs-rust-sandbox:2 /root/omp-layerfs/fixtures/hello
 ```
 
 This writes `.omp/layerfs.json` (`{ "distro", "project", "image" }`) in the folder;
@@ -77,11 +113,13 @@ a warm `target/`). So that two Branches that both built can still merge, `init` 
 root `/.lww` of `%include .gitignore` when the source has none: `.gitignore` paths merge
 newer-wins instead of conflicting. They are still stored; the Store never deletes history
 (see [Rotating a project's Store](#rotating-a-projects-store)).
-Rust, with LayerFS 5fb68dd: merging two Branches whose `target/` holds Cargo incremental
-dirs (`target/*/incremental`) fails with `Failed: invalid record: binding kind`; the same
-builds merge once that subtree is gone. Either build in a Sandbox image with
-`CARGO_INCREMENTAL=0` (recipe and reason in `bridge/rust-sandbox.Dockerfile`), or remove
-`target/*/incremental` in the same Workspace command before it commits.
+Rust: the 5fb68dd core cannot merge two Branches whose `target/` holds Cargo incremental
+dirs (`target/*/incremental`; `Failed: invalid record: binding kind`). `e49d1613f` merges
+them; on 5fb68dd use `omp-lfs-rust-sandbox:1`, built with `CARGO_INCREMENTAL=0`.
+pnpm: a Workspace mounts at a new `/workspaces/<N>` each time, and pnpm 11's workspace state
+records the absolute path it installed at, so its pre-run check would reinstall the
+committed `node_modules` in every fork. `omp-lfs-node-sandbox:3` sets
+`pnpm_config_verify_deps_before_run=false` (pnpm 11 ignores `npm_config_*` for settings).
 
 Agents then call, for example:
 
@@ -91,12 +129,12 @@ Agents then call, for example:
 - `layerfs_script {"source": "const { LayerFS } = await import(process.env.DSH_LAYERFS_SDK); ..."}`
   for merge, publish and multi-step Workspace work. `main` is read-only: fork, work,
   commit, `branch.merge`, `branch.publish`. The SDK guide is at
-  `\\wsl.localhost\layerfs-lab\root\layerfs\.agents\skills\layerfs-js-sdk\SKILL.md`.
+  `\\wsl.localhost\layerfs-lab\root\layerfs-next\.agents\skills\layerfs-js-sdk\SKILL.md`.
 
 The bridge works without OMP as well:
 
 ```powershell
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh up hello omp-lfs-rust-sandbox:1
+wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh up hello omp-lfs-rust-sandbox:2
 wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli hello hello.t1 -- status
 wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli hello hello.t1 -- run feat "cargo test"
 wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh script hello hello.t1 /root/omp-layerfs/scripts/x.mjs
@@ -153,8 +191,8 @@ removes nothing). It needs no binding: in a folder without `.omp/layerfs.json` i
 ```text
 docker engine 29.9.2, /var/lib/docker: 897G free of 1007G
   PROJECT  CLIENT   SANDBOX IMAGE           STORE  SANDBOXES             PAGE
-* hello    running  omp-lfs-rust-sandbox:1  14M    0 running, 0 stopped  http://localhost:8788
-  katana   running  omp-lfs-node-sandbox:2  1.1G   0 running, 0 stopped  http://localhost:8787
+* hello    running  omp-lfs-rust-sandbox:2  16M    0 running, 0 stopped  http://localhost:8788
+  katana   running  omp-lfs-node-sandbox:3  1.1G   0 running, 0 stopped  http://localhost:8787
 leftovers: none
 ```
 
@@ -223,7 +261,7 @@ Without OMP:
 
 ```powershell
 wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh export hello /root/hello-main
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh rotate hello omp-lfs-rust-sandbox:1
+wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh rotate hello omp-lfs-rust-sandbox:2
 wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh remove hello hello
 ```
 

@@ -23,16 +23,28 @@
 #   lfs-bridge.sh projects                     (every project here, read-only)
 #
 # env: LFS_TRACE_STEP labels this call's SDK trace lines (DSH_LAYERFS_TRACE_STEP).
+#
+# LayerFS comes from two places, chosen by env. The core: OMP_LFS_BUNDLE (layerfs-daemon,
+# layerfs.node and a COMMIT file naming the commit they were built from) with
+# OMP_LFS_CHECKOUT (that commit's checkout: SDK JS, operator, lfs.js, SKILL.md); `up`
+# refuses a bundle whose COMMIT is not the checkout's HEAD. The page: OMP_LFS_UI_CHECKOUT,
+# whose DSH host and view/model code ui/server.mjs loads (it runs on the core's SDK).
+# A client is made for one core and page checkout (OMP_LFS_CORE in its environment);
+# under other ones, `up` recreates it and the other subcommands refuse it.
 set -euo pipefail
 
-BUNDLE=${OMP_LFS_BUNDLE:-/root/layerfs-linux-build}
-LAYERFS=${OMP_LFS_CHECKOUT:-/root/layerfs}
+BUNDLE=${OMP_LFS_BUNDLE:-/root/layerfs-next-bundle}
+LAYERFS=${OMP_LFS_CHECKOUT:-/root/layerfs-next}
+UI_LAYERFS=${OMP_LFS_UI_CHECKOUT:-/root/layerfs}
 ROOT=${OMP_LFS_ROOT:-/root/omp-layerfs}
 RUNTIME_IMAGE=${OMP_LFS_RUNTIME_IMAGE:-layerfs-352-runtime:node24}
 SDK=file://$LAYERFS/sdk/js/src/index.js
 OPERATOR=file://$LAYERFS/sdk/js/operator/index.js
 CLI=$LAYERFS/dsh/packages/host/src/lfs.js
 SKILL=$LAYERFS/.agents/skills/layerfs-js-sdk/SKILL.md
+CORE="$BUNDLE $LAYERFS $UI_LAYERFS"
+# what a client made before OMP_LFS_CORE existed was made for
+LEGACY_CORE="/root/layerfs-linux-build /root/layerfs /root/layerfs"
 
 die() { echo "lfs-bridge: $*" >&2; exit 64; }
 usage() { sed -n '12,24p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
@@ -50,33 +62,62 @@ image_id() {
   docker image inspect --format '{{.Id}}' "$1" 2>/dev/null || die "image '$1' not found in this distro's Docker"
 }
 
+# The core a client was made for: its OMP_LFS_CORE, else the old bridge's fixed paths.
+client_core() {
+  local core
+  core=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$1" | sed -n 's/^OMP_LFS_CORE=//p')
+  echo "${core:-$LEGACY_CORE}"
+}
+
+# The bundle must be built from the checkout's HEAD: its COMMIT file says from which.
+# The old bundle has none; it is taken only with the checkout it was built from.
+check_core() {
+  local head built
+  [ -x "$BUNDLE/layerfs-daemon" ] && [ -f "$BUNDLE/layerfs.node" ] || die "OMP_LFS_BUNDLE $BUNDLE has no layerfs-daemon and layerfs.node"
+  [ -f "${SDK#file://}" ] || die "OMP_LFS_CHECKOUT $LAYERFS has no SDK (sdk/js/src/index.js)"
+  [ -d "$UI_LAYERFS/dsh/packages/host/src" ] || die "OMP_LFS_UI_CHECKOUT $UI_LAYERFS has no DSH host (dsh/packages/host/src)"
+  head=$(git -C "$LAYERFS" rev-parse HEAD 2>/dev/null) || die "OMP_LFS_CHECKOUT $LAYERFS is not a git checkout"
+  if [ -f "$BUNDLE/COMMIT" ]; then
+    built=$(tr -d ' \n' < "$BUNDLE/COMMIT")
+    [ "$built" = "$head" ] || die "bundle $BUNDLE is built from $built, but checkout $LAYERFS is at $head; set OMP_LFS_BUNDLE and OMP_LFS_CHECKOUT to a matching pair"
+  else
+    [ "$LAYERFS" = /root/layerfs ] || die "bundle $BUNDLE has no COMMIT file; a bundle without one is taken only with OMP_LFS_CHECKOUT=/root/layerfs"
+  fi
+}
+
 # up <project> <image>: the project's client container, running. Idempotent;
-# a client whose LAYERFS_IMAGE (or runtime image) resolves to another image id
-# is recreated (the Store volume stays).
+# a client whose LAYERFS_IMAGE (or runtime image) resolves to another image id,
+# or that was made for another core or page checkout, is recreated (the Store
+# volume stays); a core change is refused while Sandboxes run.
 cmd_up() {
   [ $# -eq 2 ] || usage
-  local project=$1 image=$2 name sbx runtime have have_rt have_id
+  local project=$1 image=$2 name sbx runtime have have_rt have_id have_core
   check_project "$project"
+  check_core
   name=$(client "$project")
   sbx=$(image_id "$image")
   runtime=$(image_id "$RUNTIME_IMAGE")
   if have_rt=$(docker inspect --format '{{.Image}}' "$name" 2>/dev/null); then
     have=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$name" | sed -n 's/^LAYERFS_IMAGE=//p')
     have_id=$(docker image inspect --format '{{.Id}}' "$have" 2>/dev/null || echo "${have:-none}")
-    if [ "$have_id $have_rt" = "$sbx $runtime" ]; then
+    have_core=$(client_core "$name")
+    if [ "$have_id $have_rt" = "$sbx $runtime" ] && [ "$have_core" = "$CORE" ]; then
       [ "$(docker inspect --format '{{.State.Running}}' "$name")" = true ] || docker start "$name" >/dev/null
       echo "client $name up (image $image, unchanged)"
       return
     fi
-    echo "client $name recreated: LAYERFS_IMAGE $have_id -> $sbx ($image), runtime $have_rt -> $runtime; Store volume $name-store kept"
+    [ "$have_core" = "$CORE" ] || refuse_busy "$project" "switching $name from core [$have_core] to [$CORE]"
+    echo "client $name recreated: LAYERFS_IMAGE $have_id -> $sbx ($image), runtime $have_rt -> $runtime, core [$have_core] -> [$CORE]; Store volume $name-store kept"
     docker rm -f "$name" >/dev/null
   fi
   mkdir -p "$ROOT/scripts" "$ROOT/traces"
   docker volume inspect "$name-store" >/dev/null 2>&1 || docker volume create "$name-store" >/dev/null
+  local mounts=(--mount type=bind,src="$BUNDLE",dst="$BUNDLE",readonly
+    --mount type=bind,src="$LAYERFS",dst="$LAYERFS",readonly)
+  [ "$UI_LAYERFS" = "$LAYERFS" ] || mounts+=(--mount type=bind,src="$UI_LAYERFS",dst="$UI_LAYERFS",readonly)
   docker run -d --name "$name" --pull never --init \
     --label omp-lfs.project="$project" \
-    --mount type=bind,src="$BUNDLE",dst="$BUNDLE",readonly \
-    --mount type=bind,src="$LAYERFS",dst="$LAYERFS",readonly \
+    "${mounts[@]}" \
     --mount type=bind,src="$ROOT",dst="$ROOT" \
     --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
     --mount type=volume,src="$name-store",dst=/layerfs-store,volume-nocopy \
@@ -85,20 +126,24 @@ cmd_up() {
     -e LAYERFS_DAEMON="$BUNDLE/layerfs-daemon" -e LAYERFS_NATIVE="$BUNDLE/layerfs.node" \
     -e LAYERFS_CONTAINER_PREFIX="$name-" -e LAYERFS_CONSTRUCTION_WORKERS=1 \
     -e LAYERFS_DAEMON_HOST=127.0.0.1 \
+    -e OMP_LFS_CORE="$CORE" -e OMP_LFS_CHECKOUT="$LAYERFS" -e OMP_LFS_UI_CHECKOUT="$UI_LAYERFS" \
     --network host -w "$BUNDLE" --entrypoint /bin/sh "$runtime" \
     -c 'umask 077; mkdir -p /layerfs-store/sdk-home /layerfs-store/global; exec sleep infinity' >/dev/null
-  echo "client $name up (image $image, Store volume $name-store)"
+  echo "client $name up (image $image, Store volume $name-store, core $(cat "$BUNDLE/COMMIT" 2>/dev/null || echo "$BUNDLE"))"
 }
 
-# The running client of <project>, started again when stopped.
+# The running client of <project>, started again when stopped; refused when it was
+# made for another core or page checkout than this bridge's (`up` switches it).
 running_client() {
-  local name
+  local name have
   name=$(client "$1")
   case $(docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null || echo missing) in
     true) ;;
     false) docker start "$name" >/dev/null ;;
     *) die "project '$1' has no client container; run: lfs-bridge.sh init $1 <image> <src-dir> (or up)" ;;
   esac
+  have=$(client_core "$name")
+  [ "$have" = "$CORE" ] || die "client $name was made for core [$have] (bundle, checkout, page checkout), this bridge uses [$CORE]: run lfs-bridge.sh up $1 <image> to recreate it (refused while its Sandboxes run: unmount their Workspaces first), or set OMP_LFS_BUNDLE, OMP_LFS_CHECKOUT and OMP_LFS_UI_CHECKOUT to the client's"
   echo "$name"
 }
 

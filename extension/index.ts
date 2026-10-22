@@ -20,7 +20,8 @@ const BRIDGE = "/opt/omp-layerfs/lfs-bridge.sh";
 const ROOT = "/root/omp-layerfs";
 const TRACES = `${ROOT}/traces`;
 const DEFAULT_DISTRO = "layerfs-lab";
-const SKILL = "/root/layerfs/.agents/skills/layerfs-js-sdk/SKILL.md";
+/** The SDK guide in the bridge's core checkout (OMP_LFS_CHECKOUT default /root/layerfs-next). */
+const SKILL = "/root/layerfs-next/.agents/skills/layerfs-js-sdk/SKILL.md";
 /** Characters kept per output stream; the rest is cut from the middle. */
 const STREAM_LIMIT = 60_000;
 /** The SDK cuts trace step labels to this many characters (sdk/js/src/trace.js). */

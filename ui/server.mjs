@@ -1,7 +1,12 @@
 // The LayerFS Work/History/Sandboxes page for one OMP project, without DeepSeek Harness.
 // Runs in the project's client container (lfs-bridge.sh ui <project> [port]),
-// which has the SDK's LAYERFS_* deployment, /root/layerfs read-only and the
-// trace folder at its own path.
+// which has the SDK's LAYERFS_* deployment, both LayerFS checkouts read-only and
+// the trace folder at its own path. Two checkouts, both named in the client's
+// environment by the bridge: the core one (OMP_LFS_CHECKOUT) gives the SDK and
+// operator, matching the client's daemon and native addon; the UI one
+// (OMP_LFS_UI_CHECKOUT) gives only DSH's host and view/model code, which the page
+// is written against. A client without them (made by an older bridge) has both
+// at /root/layerfs.
 //
 // The /layerfs routes are DSH's own handler (dsh/packages/host/src/route.js),
 // registered through a stand-in for the DSH plugin context, over DSH's own
@@ -39,7 +44,7 @@ import { promisify } from "node:util";
 
 const LAYERFS = process.env.OMP_LFS_CHECKOUT || "/root/layerfs";
 const ROOT = process.env.OMP_LFS_ROOT || "/root/omp-layerfs";
-const DSH = join(LAYERFS, "dsh");
+const DSH = join(process.env.OMP_LFS_UI_CHECKOUT || "/root/layerfs", "dsh");
 const HOST = join(DSH, "packages/host/src");
 const UI = dirname(fileURLToPath(import.meta.url));
 const TRACES = join(ROOT, "traces");
@@ -123,7 +128,8 @@ const RUNTIME = pathToFileURL(join(HOST, "runtime.js")).href;
 const CHILD_PROCESS_SHIM = `data:text/javascript,${encodeURIComponent('export * from "node:child_process"; export const execFile = globalThis[Symbol.for("omp-lfs.runtimeExecFile")];')}`;
 
 // The host modules import their workspace packages by name; there is no
-// node_modules in the checkout, so the names resolve to the checkout's files.
+// node_modules in the checkouts, so the names resolve to checkout files: DSH's
+// model to the UI checkout, the SDK to the core checkout.
 const SESSION_SHIM = "data:text/javascript,export function appendPluginRecord() {}";
 const NAMES = [
   [/^@dsh-layerfs\/model$/, () => join(DSH, "packages/model/src/index.js")],
