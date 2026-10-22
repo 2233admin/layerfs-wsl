@@ -618,6 +618,24 @@ function agentsReport(project: string, calls: LoggedCall[]): string {
 	return [`${by.size} sessions with LayerFS calls on project ${project} (first call order):`, ...rows].join("\n");
 }
 
+/**
+ * The bridge's `projects` output with the bound project's row marked `*`: rows are
+ * the indented lines after the `  PROJECT` header, before `leftovers`.
+ */
+function markProject(out: string, project: string): string {
+	const lines = out.trimEnd().split("\n");
+	const header = lines.findIndex((l) => l.startsWith("  PROJECT "));
+	let found = false;
+	for (let i = header + 1; header >= 0 && i < lines.length && lines[i].startsWith("  "); i++) {
+		if (lines[i].slice(2).split(/\s+/, 1)[0] === project) {
+			lines[i] = `* ${lines[i].slice(2)}`;
+			found = true;
+		}
+	}
+	if (!found) lines.push(`(the project bound to this folder, ${project}, is not among them)`);
+	return lines.join("\n");
+}
+
 export default function layerfs(pi: ExtensionAPI) {
 	const z = pi.zod;
 	pi.setLabel("LayerFS");
@@ -744,11 +762,11 @@ export default function layerfs(pi: ExtensionAPI) {
 	});
 
 	const USAGE =
-		"usage: /layerfs init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop | export <linux-dest-dir> | rotate [new-project] | remove <project>";
+		"usage: /layerfs init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop | export <linux-dest-dir> | rotate [new-project] | remove <project> | projects";
 
 	pi.registerCommand("layerfs", {
 		description:
-			"LayerFS project of this folder: init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop | export <linux-dest-dir> | rotate [new-project] | remove <project>",
+			"LayerFS project of this folder: init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop | export <linux-dest-dir> | rotate [new-project] | remove <project> | projects (every project in the distro)",
 		handler: async (args, ctx) => {
 			const [sub, ...rest] = String(args ?? "").trim().split(/\s+/).filter(Boolean);
 			const show = (text: string, ok: boolean) => {
@@ -811,6 +829,12 @@ export default function layerfs(pi: ExtensionAPI) {
 						);
 					const r = await bridge(bound?.distro ?? DEFAULT_DISTRO, ["remove", project, project]);
 					show(format(r), r.code === 0);
+				} else if (sub === "projects") {
+					// every project in the distro; works without a binding (default distro)
+					if (rest.length) throw new Error("usage: /layerfs projects");
+					const bound = existsSync(bindingFile(ctx.cwd)) ? readBinding(ctx.cwd) : undefined;
+					const r = await bridge(bound?.distro ?? DEFAULT_DISTRO, ["projects"]);
+					show(r.code === 0 && bound ? format({ ...r, stdout: markProject(r.stdout, bound.project) }) : format(r), r.code === 0);
 				} else if (sub === "log") {
 					const n = rest[0] === undefined ? 30 : Number(rest[0]);
 					if (!Number.isInteger(n) || n < 1 || rest.length > 1) throw new Error("usage: /layerfs log [n]");

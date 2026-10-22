@@ -58,7 +58,8 @@ Bind a folder to a project (copies a distro folder into a new LayerFS Store once
 
 This writes `.omp/layerfs.json` (`{ "distro", "project", "image" }`) in the folder;
 without it the tools refuse. `/layerfs status` lists Branches, `/layerfs down` stops the
-client container (the Store volume stays). `/layerfs export`, `/layerfs rotate` and
+client container (the Store volume stays). `/layerfs projects` lists every project in the
+distro ([All projects](#all-projects)). `/layerfs export`, `/layerfs rotate` and
 `/layerfs remove` are in [Rotating a project's Store](#rotating-a-projects-store).
 
 Build output is committed with the sources (that is what makes a new Workspace start with
@@ -131,6 +132,38 @@ cmd /c "omp -p --mode json -e ..\extension\index.ts ""/layerfs log 60"" < NUL > 
 cmd /c "omp -p --mode json -e ..\extension\index.ts ""/layerfs agents"" < NUL > cmd-agents.jsonl"
 ```
 
+### All projects
+
+`/layerfs projects` lists every project in the distro, read-only (it starts, stops and
+removes nothing). It needs no binding: in a folder without `.omp/layerfs.json` it uses
+`layerfs-lab`; with one, the binding's distro, and the bound project's row is marked `*`
+(a note follows when that project is not listed). Without OMP:
+`wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh projects`.
+
+```text
+docker engine 29.9.2, /var/lib/docker: 897G free of 1007G
+  PROJECT  CLIENT   SANDBOX IMAGE           STORE  SANDBOXES
+* hello    running  omp-lfs-rust-sandbox:1  14M    0 running, 1 stopped
+leftovers: none
+```
+
+- **First line:** the Docker Engine version and the free disk under its data root.
+- **One row per project** found from an `omp-lfs-<project>-store` volume or an
+  `omp-lfs-<project>` client (label `omp-lfs.project`):
+  - `CLIENT`: the client container's state, `running`, `stopped` or `missing`.
+  - `SANDBOX IMAGE`: the image new Sandboxes run (the client's `LAYERFS_IMAGE`, the
+    binding's `image`) as its tag, or a short id when it has no tag.
+  - `STORE`: the Store volume's size (`du -sh` of its mountpoint, so a large Store takes
+    a while), or `none`.
+  - `SANDBOXES`: the containers other than the client that use the Store volume.
+    `created`, `exited` and `dead` count as stopped; any other state counts as running.
+- **`leftovers`:**
+  - containers labelled `layerfs.role=sandbox` whose Store volume (the one mounted at
+    `/layerfs-store`) no longer exists;
+  - clients without their Store volume.
+
+  Sandboxes of other LayerFS Stores whose volume still exists are not listed.
+
 ### Rotating a project's Store
 
 A LayerFS Store never collects garbage: every Commit, Layer and committed `target/` stays,
@@ -154,8 +187,9 @@ from the files of the current `main`:
   so, and a Branch published only before them is listed as dropped too.
 - `rotate` is refused while a Sandbox of the project runs (a Sandbox closes 2 minutes
   after its last Workspace is unmounted). It exports `main` to
-  `/root/omp-layerfs/exports/<project>-<UTC time>`, stops the Sandbox the export started,
-  runs `init` of the new project from that folder with the same image, and prints the old
+  `/root/omp-layerfs/exports/<project>-<UTC time>` (the export's Sandbox closes itself
+  after 2 idle minutes, so `remove` of the old project waits for it), runs `init` of the
+  new project from that folder with the same image, and prints the old
   and new project, the export folder and both Store volumes' sizes. The old project is
   kept; the export folder is a full copy of `main`'s files that you delete yourself.
 - **`/layerfs export <linux-dest-dir>`** writes the bound project's `main` into a new or
@@ -189,7 +223,11 @@ The page is DSH's own LayerFS view (`dsh/packages/view`, `dsh/packages/model`, s
 unbuilt from the checkout) with its Work | History switch: Work has the Branches with
 the agents on them, the Store's storage and the project terminal of the calls; History
 has the project's tree of Branches, Commits and Layers, the Files at a picked point and
-Storage. `?pane=work` or `?pane=history` opens that side.
+Storage. A third switch, Sandboxes (a port of DSH's project Sandboxes tab), lists each
+Sandbox with its Workspaces (Branch, agent, idle time, uncommitted changes) and background
+processes, with Unmount / Discard… and Stop… (disabled while an agent's call runs in that
+Workspace); it is the server's only write route, `POST /layerfs/project/<p>/runtime`,
+JSON-only and same-origin. `?pane=work`, `?pane=history` or `?pane=sandboxes` opens a view.
 
 - Every OMP session with a trace file on the project is one agent. The extension writes
   `<project>.<session-id>.meta.json` beside each trace (`parent`: the spawning session, null

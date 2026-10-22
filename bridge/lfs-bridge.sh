@@ -20,6 +20,7 @@
 #   lfs-bridge.sh export <project> <dest-dir>  (main's files, minus /.gitignore paths)
 #   lfs-bridge.sh rotate <project> <image> [new-project]
 #   lfs-bridge.sh remove <project> <project>   (the name twice, to confirm)
+#   lfs-bridge.sh projects                     (every project here, read-only)
 #
 # env: LFS_TRACE_STEP labels this call's SDK trace lines (DSH_LAYERFS_TRACE_STEP).
 set -euo pipefail
@@ -34,10 +35,11 @@ CLI=$LAYERFS/dsh/packages/host/src/lfs.js
 SKILL=$LAYERFS/.agents/skills/layerfs-js-sdk/SKILL.md
 
 die() { echo "lfs-bridge: $*" >&2; exit 64; }
-usage() { sed -n '12,23p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
+usage() { sed -n '12,24p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
 
+valid_project() { [[ $1 =~ ^[a-z0-9]([a-z0-9_.-]{0,61}[a-z0-9])?$ ]]; }
 check_project() {
-  [[ $1 =~ ^[a-z0-9]([a-z0-9_.-]{0,61}[a-z0-9])?$ ]] || die "bad project name '$1' (a-z 0-9 _ - ., 1-63 chars, letter/digit at both ends)"
+  valid_project "$1" || die "bad project name '$1' (a-z 0-9 _ - ., 1-63 chars, letter/digit at both ends)"
 }
 check_trace() {
   [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "bad trace id '$1'"
@@ -291,7 +293,7 @@ store_size() {
 # the first N whose container and Store volume are free.
 cmd_rotate() {
   [ $# -ge 2 ] && [ $# -le 3 ] || usage
-  local project=$1 image=$2 new=${3:-} name stem n dest before after started js
+  local project=$1 image=$2 new=${3:-} name stem n dest before after js
   check_project "$project"
   image_id "$image" >/dev/null
   name=$(client "$project")
@@ -358,13 +360,6 @@ EOF
   mkdir -p "$ROOT/exports"
   dest=$ROOT/exports/$project-$(date -u +%Y%m%dT%H%M%SZ)
   cmd_export "$project" "$dest"
-  # No Sandbox ran before the export; the one it started would hold the volume
-  # for 2 idle minutes, refusing `remove`.
-  started=$(busy_sandboxes "$project")
-  if [ -n "$started" ]; then
-    docker stop $started >/dev/null
-    echo "stopped the export's Sandbox: $(echo $started)"
-  fi
   before=$(store_size "$project")
   cmd_init "$new" "$image" "$dest" || die "init of $new from $dest failed; $project is unchanged and the export is kept"
   after=$(store_size "$new")
@@ -427,6 +422,72 @@ cmd_ui_stop() {
   echo "LayerFS page of $1 stopped"
 }
 
+# The size of a volume as du -sh gives it, read at its mountpoint (dockerd runs in
+# this distro): no container is started or exec'd. du reads every file, so a big
+# Store takes a while.
+volume_size() {
+  local dir out
+  dir=$(docker volume inspect --format '{{.Mountpoint}}' "$1" 2>/dev/null) || return 1
+  out=$(du -sh "$dir") || return 1
+  echo "${out%%$'\t'*}"
+}
+
+# An image id as the image's first tag, else as a short id.
+image_name() {
+  local tag id=${1#sha256:}
+  tag=$(docker image inspect --format '{{if .RepoTags}}{{index .RepoTags 0}}{{end}}' "$1" 2>/dev/null || true)
+  echo "${tag:-${id:0:12}}"
+}
+
+# projects: every project here, read-only. The Docker Engine and the free disk under
+# its data root; one row per project found from omp-lfs-<project>-store volumes and
+# omp-lfs-<project> clients (label omp-lfs.project); then leftovers: Sandboxes whose
+# Store volume is gone, and clients without a Store volume.
+cmd_projects() {
+  [ $# -eq 0 ] || usage
+  local root p name vol state img size up down rows= leftovers= c line
+  root=$(docker info --format '{{.DockerRootDir}}')
+  echo "docker engine $(docker version --format '{{.Server.Version}}'), $root: $(df -hP "$root" | awk 'NR == 2 { print $4 " free of " $2 }')"
+  for p in $( { docker volume ls --format '{{.Name}}' | sed -n 's/^omp-lfs-\(.*\)-store$/\1/p'
+                docker ps -a --filter label=omp-lfs.project --format '{{.Label "omp-lfs.project"}}'; } | sort -u); do
+    valid_project "$p" || continue
+    name=$(client "$p") vol=$(client "$p")-store
+    case $(docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null || echo missing) in
+      true) state=running ;;
+      false) state=stopped ;;
+      *) state=missing ;;
+    esac
+    img=-
+    [ "$state" = missing ] || img=$(image_name "$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$name" | sed -n 's/^LAYERFS_IMAGE=//p')")
+    if ! size=$(volume_size "$vol"); then
+      size=none
+      [ "$state" = missing ] || leftovers+="  client $name ($state): no Store volume $vol"$'\n'
+    fi
+    # as busy_sandboxes: created, exited and dead are stopped, any other state runs
+    read -r up down < <(volume_users "$p" | awk '{ if ($2 == "created" || $2 == "exited" || $2 == "dead") d++; else u++ } END { print u + 0, d + 0 }')
+    rows+=$(printf '%s\t%s\t%s\t%s\t%s' "$p" "$state" "$img" "$size" "$up running, $down stopped")$'\n'
+  done
+  if [ -n "$rows" ]; then
+    { printf 'PROJECT\tCLIENT\tSANDBOX IMAGE\tSTORE\tSANDBOXES\n'; printf '%s' "$rows"; } | awk -F '\t' '
+      { for (i = 1; i <= NF; i++) { cell[NR, i] = $i; if (length($i) > w[i]) w[i] = length($i) } n = NF }
+      END { for (r = 1; r <= NR; r++) { s = "  "; for (i = 1; i < n; i++) s = s sprintf("%-" w[i] "s  ", cell[r, i]); print s cell[r, n] } }'
+  else
+    echo "no LayerFS projects (no omp-lfs-<project>-store volume, no omp-lfs-<project> client)"
+  fi
+  for c in $(docker ps -aq --filter label=layerfs.role=sandbox); do
+    line=$(docker inspect --format '{{.Name}} {{.State.Status}}{{range .Mounts}}{{if eq .Destination "/layerfs-store"}} {{.Name}}{{end}}{{end}}' "$c")
+    read -r name state vol <<<"$line"
+    [ -n "${vol:-}" ] && ! docker volume inspect "$vol" >/dev/null 2>&1 || continue
+    leftovers+="  sandbox ${name#/} ($state): Store volume $vol is gone"$'\n'
+  done
+  if [ -n "$leftovers" ]; then
+    echo "leftovers:"
+    printf '%s' "$leftovers"
+  else
+    echo "leftovers: none"
+  fi
+}
+
 [ $# -ge 1 ] || usage
 sub=$1; shift
 case $sub in
@@ -440,4 +501,5 @@ case $sub in
   export) cmd_export "$@" ;;
   rotate) cmd_rotate "$@" ;;
   remove) cmd_remove "$@" ;;
+  projects) cmd_projects "$@" ;;
 esac
