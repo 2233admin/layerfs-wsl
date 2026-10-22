@@ -40,14 +40,15 @@ for p in $projects; do
     printf 'IMAGE=%s\nPAGE=%s\n' "$img" "$pg" > "$STATE/$p.env"
   fi
   if docker inspect "$old" >/dev/null 2>&1; then
-    "$OLD" ui-stop "$p" >/dev/null 2>&1 || true
+    "$OLD" ui-stop "$p" </dev/null >/dev/null 2>&1 || true
     install -m 644 /dev/stdin "$OLD_ROOT/scripts/migrate-reclaim.mjs" <<'EOF'
 const { LayerFS } = await import(process.env.DSH_LAYERFS_SDK);
 const { LayerFSOperator } = await import(process.env.DSH_LAYERFS_OPERATOR);
 const lf = new LayerFS(process.env.DSH_LAYERFS_PROJECT);
 try { console.log(`Sandboxes still open: ${JSON.stringify(await new LayerFSOperator(lf).sandbox.list())}`); } finally { await lf.close(); }
 EOF
-    "$OLD" script "$p" "$p.migrate" "$OLD_ROOT/scripts/migrate-reclaim.mjs"
+    # </dev/null: the old bridge's docker exec -i would read the rest of a piped script
+    "$OLD" script "$p" "$p.migrate" "$OLD_ROOT/scripts/migrate-reclaim.mjs" </dev/null
     rm -f "$OLD_ROOT/scripts/migrate-reclaim.mjs"
   fi
   running=$(docker ps --filter "volume=$from" --format '{{.Names}}' | grep -vx "$old" || true)
@@ -87,8 +88,14 @@ for p in $projects; do
   . "$STATE/$p.env"
   tag=$(docker image inspect --format '{{join .RepoTags "\n"}}' "$IMAGE" 2>/dev/null | grep -m1 '^lfsb-' || true)
   [ -n "$tag" ] || { echo "$p: no lfsb-* tag for its image $IMAGE; run: $NEW up $p <image>"; continue; }
-  "$NEW" up "$p" "$tag"
-  if [ "$PAGE" = 1 ]; then "$NEW" ui "$p"; fi
+  "$NEW" up "$p" "$tag" </dev/null
+  if [ "$PAGE" = 1 ]; then "$NEW" ui "$p" </dev/null; fi
+done
+# done only when every noted project's new client runs; else the notes stay for a rerun
+for p in $projects; do
+  [ -f "$STATE/$p.env" ] || continue
+  [ "$(docker inspect --format '{{.State.Running}}' "lfsb-$p" 2>/dev/null)" = true ] \
+    || die "$p: its new client lfsb-$p does not run; fix that and run this again"
 done
 rm -rf /opt/omp-layerfs "$STATE"
 echo "migrated. Old Store volumes kept: $(for p in $projects; do printf 'omp-lfs-%s-store ' "$p"; done)"
