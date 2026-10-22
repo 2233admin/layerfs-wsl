@@ -69,7 +69,8 @@ Rollback to the 5fb68dd core is an environment change while the project is idle:
 `OMP_LFS_BUNDLE=/root/layerfs-linux-build OMP_LFS_CHECKOUT=/root/layerfs lfs-bridge.sh up <p>
 omp-lfs-rust-sandbox:1` (the Rust image without incremental builds, see below), then `ui <p>`.
 For OMP, set the same two variables on Windows and list them in `WSLENV`
-(`OMP_LFS_BUNDLE/u:OMP_LFS_CHECKOUT/u`). Stores written by either core open on the other.
+(`OMP_LFS_BUNDLE/u:OMP_LFS_CHECKOUT/u`); this OMP route has not been run yet. Stores written
+by either core open on the other (tested both ways on copies of real Stores).
 
 Install the bridge and the page (from this folder, PowerShell):
 
@@ -116,6 +117,12 @@ newer-wins instead of conflicting. They are still stored; the Store never delete
 Rust: the 5fb68dd core cannot merge two Branches whose `target/` holds Cargo incremental
 dirs (`target/*/incremental`; `Failed: invalid record: binding kind`). `e49d1613f` merges
 them; on 5fb68dd use `omp-lfs-rust-sandbox:1`, built with `CARGO_INCREMENTAL=0`.
+After a merge of two Branches that both built, rebuild before trusting a test run:
+`/target` keeps the newer side's build, whose fingerprints are newer than the other side's
+merged sources (a merge keeps each file's mtime), so Cargo can call the merged crate fresh
+and run one side's old test binary. Seen on `hello`: 7 tests instead of 8 until
+`cargo clean -p hello && cargo test`. The same holds for any build tool that compares
+mtimes.
 pnpm: a Workspace mounts at a new `/workspaces/<N>` each time, and pnpm 11's workspace state
 records the absolute path it installed at, so its pre-run check would reinstall the
 committed `node_modules` in every fork. `omp-lfs-node-sandbox:3` sets
