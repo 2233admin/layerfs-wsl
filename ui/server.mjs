@@ -1,4 +1,4 @@
-// The LayerFS Work/History page for one OMP project, without DeepSeek Harness.
+// The LayerFS Work/History/Sandboxes page for one OMP project, without DeepSeek Harness.
 // Runs in the project's client container (lfs-bridge.sh ui <project> [port]),
 // which has the SDK's LAYERFS_* deployment, /root/layerfs read-only and the
 // trace folder at its own path.
@@ -22,7 +22,9 @@
 //     overview: the client has the Docker socket, not the CLI, so those reads
 //     are answered from the Engine API (see "docker"), and the home's container
 //     prefix is the bridge's LAYERFS_CONTAINER_PREFIX (Sandboxes are
-//     omp-lfs-<project>-<project>-<n>, not DSH's layerfs-<project>-<n>).
+//     omp-lfs-<project>-<project>-<n>, not DSH's layerfs-<project>-<n>). The
+//     tab's actions (unmount, discard, stop) are SDK calls, no docker command;
+//     of the handler's writes only they are let through (requestRejection).
 // The page (index.html, page.js) and DSH's view/model packages are served
 // statically; the packages are imported unbuilt, as the DSH client does.
 //
@@ -262,13 +264,22 @@ const trees = new TreeReader(spec, openClient);
 let route = null;
 /**
  * DSH's Connection checks, for a page without sign-in: only a localhost Host (DNS
- * rebinding), and only reads. The handler's writes (Init, project removal, Sandbox
- * actions) are refused, so no other site's page can make them through a viewer's browser.
+ * rebinding), and reads. The one write let through is the Sandboxes view's action on
+ * this project's Workspaces and processes (POST /layerfs/project/<project>/runtime:
+ * unmount, discard, stop), and only as the page sends it: a JSON body, which another
+ * site's page can only send after a CORS preflight this server never grants (OPTIONS is
+ * refused), and, when the browser names its Origin, this page's own. The handler's other
+ * writes (Init, project removal, the Store and leftover actions) stay refused.
  */
+const ACTION = `/layerfs/project/${encodeURIComponent(project)}/runtime`;
 function requestRejection(req) {
   const host = String(req.headers.host ?? "").replace(/:\d+$/, "");
   if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]") return 403;
-  return req.method === "GET" || req.method === "HEAD" ? undefined : 405;
+  if (req.method === "GET" || req.method === "HEAD") return undefined;
+  if (req.method !== "POST" || new URL(String(req.url), "http://localhost").pathname !== ACTION) return 405;
+  if (!/^application\/json\s*(;|$)/i.test(String(req.headers["content-type"] ?? ""))) return 415;
+  const origin = req.headers.origin;
+  return origin === undefined || (/^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d+$/.test(origin) && origin.endsWith(`:${port}`)) ? undefined : 403;
 }
 registerRoutes(ctx, { spec, bindings, collector, trees });
 

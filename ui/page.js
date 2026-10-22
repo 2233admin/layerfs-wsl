@@ -4,18 +4,21 @@
 // agent's SDK calls (the trace lines the server collects) are played on top,
 // each a moment after it ended. seedEngine/attribute/chronological are
 // replay.ts, Playback is playback.ts and storeOf is storage.ts, in plain JS;
-// Board below is LayerFsView.tsx's Board without React.
+// Board below is LayerFsView.tsx's Board without React, and the Sandboxes view
+// beside its Work | History switch is SandboxesTab.tsx (with runtimeParts.tsx).
 import { createFilesSource, createView, heroAvatars, injectStyle } from "/dsh/packages/view/src/index.js";
 import * as X from "/dsh/packages/model/src/index.js";
 
 const FM = globalThis.LayerFiles, M = globalThis.LayerSim; // the simulator's UMD helpers (index.html)
 const POLL_MS = 1500, STORE_MS = 10_000, LAG_MS = 2000;
 
-async function call(path) {
-  const res = await fetch(`/layerfs${path}`, { cache: "no-store" });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.message || `HTTP ${res.status}`);
-  return body;
+/** GET /layerfs<path>, or POST it `body` as JSON. */
+async function call(path, body) {
+  const init = body === undefined ? { cache: "no-store" } : { method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+  const res = await fetch(`/layerfs${path}`, init);
+  const answer = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(answer.message || `HTTP ${res.status}`);
+  return answer;
 }
 const P = (name) => `/project/${encodeURIComponent(name)}`;
 const filesQuery = (query) => new URLSearchParams(Object.entries(query).map(([k, v]) => [k, String(v)])).toString();
@@ -151,6 +154,151 @@ function storeOf(storage, state, lines = []) {
   };
 }
 
+// ---------------------------------------------------------------- SandboxesTab.tsx
+// A project's Sandboxes: each running Sandbox (omp-lfs-<project>-<project>-<n>)
+// with how full it is, and each Workspace in it with its Branch, the agent that
+// mounted it, how long it has sat, its uncommitted changes and background
+// processes. LayerFS starts and closes Sandboxes by itself; the actions here end
+// one Workspace or process (POST .../runtime). One that would cut off an agent's
+// call running in that Workspace is disabled; one that loses work asks first.
+// A third button on the view's Work | History switch shows it in their place.
+const SBX_MS = 10_000; // runtimeParts.tsx POLL_MS: each read asks the Sandboxes' daemons
+const LEVEL_WORD = { ok: "ok", degraded: "needs a look", down: "down" };
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+/** 40 s, 12 min, 3 h, 2 d. */
+function span(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  if (s < 86400) return `${Math.round(s / 3600)} h`;
+  return `${Math.round(s / 86400)} d`;
+}
+/** `/workspaces/3` → "WS 3", as the views name a Workspace. */
+const wsName = (path) => `WS ${path.slice(path.lastIndexOf("/") + 1)}`;
+/** A Sandbox's image as shown: its tag, else the digest's first 12 hex digits. */
+const imageLabel = (s) => s.imageName ?? (s.image ? s.image.replace(/^sha256:/, "").slice(0, 12) : null);
+const dot = (level, title = LEVEL_WORD[level]) => `<span class="sbx-dot ${level}" role="img" aria-label="${esc(title)}" title="${esc(title)}"></span>`;
+const meter = (used, capacity) => `<span class="sbx-meter${used >= capacity ? " full" : ""}" title="${used} of ${capacity} Workspaces"><span style="width:${Math.min(1, used / capacity) * 100}%"></span></span>`;
+const chip = (text, tone = "") => `<span class="sbx-chip ${tone}">${esc(text)}</span>`;
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** One Workspace row: its Branch, agent, idle time, changes, processes, actions and the open question. */
+function workspaceRow(sb, w, disabled, ask) {
+  const why = w.busy ? `An agent's call is running in ${wsName(w.path)}; wait for it to end` : null;
+  const at = `data-sandbox="${esc(sb.id)}" data-path="${esc(w.path)}"`;
+  const off = disabled || w.busy ? " disabled" : "";
+  const sat = w.busy ? "in use now" : w.idleMs !== null ? `idle ${span(w.idleMs)}` : (w.activity ?? "").toLowerCase() || "mounted";
+  const action = w.uncommitted
+    ? `<button class="outline" data-act="discard" ${at}${off} title="${esc(why ?? "Drop its uncommitted changes and unmount it")}">Discard…</button>`
+    : `<button class="outline" data-act="unmount" ${at}${off} title="${esc(why ?? "Unmount it: nothing is uncommitted")}">Unmount</button>`;
+  const processes = w.processes.map((p) => `<div class="sbx-proc"><code title="${esc(p.command)}">${esc(p.command)}</code><span>· ${esc(p.status)}</span><span class="grow"></span>`
+    + `<button class="ghost" data-act="stop" ${at} data-process="${esc(p.id)}" data-command="${esc(p.command)}"${disabled ? " disabled" : ""}>Stop…</button></div>`).join("");
+  const question = !ask ? "" : `<div class="sbx-ask" role="alertdialog"><span>${ask.kind === "discard"
+    ? `Drop ${plural(w.uncommitted, "uncommitted change")} in ${esc(wsName(w.path))} (${esc(w.branch ?? "")}${w.agent ? `, ${esc(w.agent)}` : ""}) and unmount it? This can't be undone.`
+    : `Stop <code>${esc(ask.command)}</code> in ${esc(wsName(w.path))}${w.agent ? `, started by ${esc(w.agent)}` : ""}?`}</span>`
+    + `<button class="primary" data-act="confirm"${disabled ? " disabled" : ""}>${ask.kind === "discard" ? "Discard" : "Stop"}</button><button class="ghost" data-act="cancel">Cancel</button></div>`;
+  return `<div class="sbx-ws"><div class="sbx-row">${w.busy ? dot("ok", "in use") : dot(w.level)}<b class="sbx-wsname">${esc(wsName(w.path))}</b>`
+    + `<span class="mono">${esc(w.branch ?? "—")}</span>${w.agent ? `<span class="dim">· ${esc(w.agent)}</span>` : ""}<span class="dim">· ${esc(sat)}</span>`
+    + (w.uncommitted ? chip(`${w.uncommitted} uncommitted`, w.level === "ok" ? "" : "warn") : chip("clean", "ok"))
+    + (w.stale ? chip("Branch moved since mount") : "") + `<span class="grow"></span>${action}</div>${processes}${question}</div>`;
+}
+
+/**
+ * The Sandboxes view in `root` (the view's own root, for its tokens), opened
+ * by a Sandboxes button after the view's Work | History buttons; picking Work
+ * or History closes it. `open` opens it at once (?pane=sandboxes).
+ */
+function sandboxesView(root, name, open) {
+  const swap = root.querySelector(".lfs-swap");
+  const panel = document.createElement("div");
+  panel.className = "lfs-sbx lfs-own"; // lfs-own: the view's button reset leaves its controls alone
+  panel.hidden = true;
+  root.append(panel);
+  let runtime = null, error = null, busy = null, failed = null, ask = null, seq = 0, drawn = "";
+
+  function draw() {
+    const sandboxes = runtime?.sandboxes ?? [], workspaces = sandboxes.reduce((n, s) => n + s.workspaces.length, 0);
+    const disabled = !!busy || !!runtime?.pending;
+    const status = runtime ? `${plural(sandboxes.length, "Sandbox", "Sandboxes")} · ${plural(workspaces, "Workspace")} · up to ${sandboxes[0]?.capacity ?? 16} each` : error ? "Sandboxes not read" : "Reading Sandboxes…";
+    const cards = sandboxes.map((sb) => {
+      const label = sb.name ?? `Sandbox ${sb.id}`, image = imageLabel(sb);
+      return `<section class="sbx-card" aria-label="${esc(label)}"><header>${dot(sb.level)}<b class="mono">${esc(label)}</b>`
+        + `<span class="dim">${sb.workspaces.length ? "running" : "idle · closes by itself"}</span>`
+        + (image ? `<span class="dim mono small" title="${esc(sb.image)}">image ${esc(image)}</span>` : "")
+        + `<span class="grow"></span><span class="dim">${sb.workspaces.length}/${sb.capacity}</span>${meter(sb.workspaces.length, sb.capacity)}</header>`
+        + sb.workspaces.map((w) => workspaceRow(sb, w, disabled, ask && ask.sandbox === sb.id && ask.path === w.path ? ask : null)).join("") + "</section>";
+    }).join("");
+    const html = `<div class="sbx"><div class="sbx-head">${runtime ? dot(runtime.level) : ""}<span>${esc(status)}</span>`
+      + (runtime?.simulated ? `<span class="cap">· simulated</span>` : "")
+      + `<span class="grow"></span><button class="ghost" data-act="refresh"${busy ? " disabled" : ""}>Refresh</button></div><div class="sbx-body">`
+      + (error || failed ? `<div class="bad" role="status">${esc(failed ?? error)}</div>` : "")
+      + (busy ? `<div class="dim" role="status">${esc(busy)}</div>` : "")
+      + (runtime?.pending ? `<div class="dim" role="status">Still reading the Sandboxes' Workspaces; shown meanwhile from Docker and the agents' calls, without changes, Branches or processes.</div>` : "")
+      + (runtime && !sandboxes.length ? `<div class="dim">No Sandbox runs. LayerFS starts one when an agent mounts a Workspace and closes it once it sits idle; reading this page starts none.</div>` : "")
+      + cards
+      + (runtime?.gone ?? []).map((g) => `<div class="sbx-card sbx-gone">${dot("degraded")} ${esc(g.name ?? `Sandbox ${g.id}`)}: its container is gone; LayerFS closes it on the next read.</div>`).join("")
+      + "</div></div>";
+    if (html !== drawn) panel.innerHTML = drawn = html;
+  }
+
+  /** Reads the project's Sandboxes; only the latest read started is drawn. */
+  async function read() {
+    const n = ++seq;
+    try { const next = await call(`${P(name)}/runtime`); if (n === seq) { runtime = next; error = null; } } catch (e) { if (n === seq) error = e.message; }
+    if (n === seq) draw();
+  }
+  async function act(label, body) {
+    busy = label; failed = null; draw();
+    try { await call(`${P(name)}/runtime`, body); ask = null; read(); } catch (e) { failed = e.message; } finally { busy = null; draw(); }
+  }
+
+  // the view rewrites its switch at every render: the Sandboxes button goes back after its two,
+  // and while the Sandboxes are shown neither of them is the picked one
+  function mark() {
+    let button = swap.querySelector("button[data-sbx]");
+    if (!button) { swap.insertAdjacentHTML("beforeend", `<button role="tab" data-sbx="1">Sandboxes</button>`); button = swap.lastElementChild; }
+    if (open) for (const b of swap.querySelectorAll("button[data-swap]")) { b.classList.remove("on"); b.setAttribute("aria-selected", "false"); }
+    button.classList.toggle("on", open);
+    button.setAttribute("aria-selected", String(open));
+  }
+  function show(on) {
+    open = on;
+    root.classList.toggle("sbx-on", on);
+    panel.hidden = !on;
+    mark();
+    const url = new URL(location.href);
+    if (on) url.searchParams.set("pane", "sandboxes"); else if (url.searchParams.get("pane") === "sandboxes") url.searchParams.delete("pane");
+    history.replaceState(history.state, "", url);
+    if (on) { draw(); read(); }
+  }
+  swap.setAttribute("aria-label", "Work, History or Sandboxes");
+  new MutationObserver(mark).observe(swap, { childList: true });
+  // before the view's own click handling: Sandboxes is not one of its panes; Work or History closes this
+  root.addEventListener("click", (e) => {
+    if (e.target.closest(".lfs-swap button[data-sbx]")) { e.stopPropagation(); if (!open) show(true); return; }
+    if (open && e.target.closest(".lfs-swap button[data-swap]")) show(false);
+  }, true);
+  panel.addEventListener("click", (e) => {
+    e.stopPropagation(); // nothing of the view's in here
+    const el = e.target.closest("button[data-act]");
+    if (!el || el.disabled) return;
+    const { act: what, sandbox, path, process, command } = el.dataset;
+    if (what === "refresh") read();
+    else if (what === "unmount") act(`Unmounting ${wsName(path)}…`, { action: "unmount", sandbox, path });
+    else if (what === "discard") { ask = { kind: "discard", sandbox, path }; draw(); }
+    else if (what === "stop") { ask = { kind: "stop", sandbox, path, process, command }; draw(); }
+    else if (what === "cancel") { ask = null; draw(); }
+    else if (what === "confirm" && ask) {
+      if (ask.kind === "discard") act(`Discarding ${wsName(ask.path)}…`, { action: "discard", sandbox: ask.sandbox, path: ask.path, confirm: ask.path });
+      else act("Stopping the process…", { action: "stop", process: ask.process });
+    }
+  });
+  // runtimeParts.tsx usePoll: now, every SBX_MS while shown and the page is visible, and when it comes back
+  setInterval(() => { if (open && document.visibilityState === "visible") read(); }, SBX_MS);
+  document.addEventListener("visibilitychange", () => { if (open && document.visibilityState === "visible") read(); });
+  show(open);
+}
+
 // ---------------------------------------------------------------- the board
 const message = document.getElementById("message");
 const say = (text) => { message.textContent = text; message.hidden = !text; };
@@ -164,13 +312,15 @@ async function main() {
   const seed = await call(`${P(name)}/history`).catch(() => call(`${P(name)}/state`)).catch((e) => { say(`${name}'s History could not be read: ${e.message}`); return null; });
 
   injectStyle(document);
-  // ?pane=work|history opens that side of the view's Work | History switch (its per-viewer preference)
+  // ?pane=work|history opens that side of the view's Work | History switch (its per-viewer preference);
+  // ?pane=sandboxes opens the Sandboxes view beside them
   const pane = new URLSearchParams(location.search).get("pane");
   if (pane === "work" || pane === "history") {
     try { localStorage.setItem("lfs-layout", JSON.stringify({ ...JSON.parse(localStorage.getItem("lfs-layout") || "{}"), pane })); } catch { /* not kept */ }
   }
   const root = document.getElementById("lfs");
   const b = createView(root, { avatars: heroAvatars((k) => `/dsh/packages/view/src/skins/heroes/images/${k}.png`), files: FM, lineDiff: M.lineDiff, live: false, lead: "main" });
+  sandboxesView(root, name, pane === "sandboxes");
   let soon;
   b.rerender = () => { clearTimeout(soon); soon = setTimeout(() => b.W && b.render(), 40); };
   const files = createFilesSource((kind, query) => call(`${P(name)}/${kind}?${filesQuery(query)}`), () => b.rerender());

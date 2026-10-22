@@ -9,6 +9,47 @@
     #lfs { height: 100vh; position: relative; }
     #message { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 14px system-ui, sans-serif; color: #667; z-index: 1; pointer-events: none; }
     #message[hidden] { display: none; }
+    /* the Sandboxes view (page.js; DSH's SandboxesTab) in the view's own tokens, in place of Work or History */
+    .lfs.sbx-on > .lfs-cols, .lfs.sbx-on > .lfs-fx { display: none; }
+    .lfs.sbx-on > .lfs-strip > .tabs, .lfs.sbx-on > .lfs-strip > .ctl { visibility: hidden; }
+    .lfs .lfs-sbx { flex: 1; min-height: 0; overflow: auto; padding: 14px; background: var(--paper) radial-gradient(var(--dot) 1px, transparent 1px) 0 0 / 24px 24px; }
+    .lfs .lfs-sbx[hidden] { display: none; }
+    .lfs .sbx { background: var(--card); border: 1px solid var(--line); box-shadow: 0 1px 0 var(--line), 0 12px 32px rgba(30,37,51,.06); color: var(--text); font-size: 12.5px; line-height: 18px; }
+    .lfs .sbx-head { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--tab); font: 12px var(--mono); }
+    .lfs .sbx-body { display: grid; gap: 10px; padding: 12px 14px 16px; align-content: start; }
+    .lfs .sbx-card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .lfs .sbx-card > header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--well); }
+    .lfs .sbx-gone { display: flex; align-items: center; gap: 8px; padding: 6px 10px; color: var(--text-2); }
+    .lfs .sbx-ws { border-top: 1px solid var(--line); padding: 6px 10px; display: grid; gap: 6px; }
+    .lfs .sbx-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .lfs .sbx-wsname { font-weight: 500; min-width: 44px; }
+    .lfs .sbx-proc { display: flex; align-items: center; gap: 8px; padding-left: 16px; color: var(--text-2); }
+    .lfs .sbx-proc code { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lfs .sbx b.mono { font-weight: 600; }
+    .lfs .sbx .mono { font-family: var(--mono); }
+    .lfs .sbx .small { font-size: 11px; }
+    .lfs .sbx .dim { color: var(--text-2); }
+    .lfs .sbx .cap { color: var(--text-3); }
+    .lfs .sbx .grow { flex: 1; }
+    .lfs .sbx .bad { color: var(--t-red); word-break: break-word; }
+    .lfs .sbx-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+    .lfs .sbx-dot.degraded { background: var(--orange); }
+    .lfs .sbx-dot.down { background: var(--red); }
+    .lfs .sbx-meter { display: inline-block; flex: none; width: 64px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+    .lfs .sbx-meter > span { display: block; height: 100%; background: var(--accent); }
+    .lfs .sbx-meter.full > span { background: var(--orange); }
+    .lfs .sbx-chip { padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--text-2); white-space: nowrap; }
+    .lfs .sbx-chip.warn { color: var(--t-orange); }
+    .lfs .sbx-chip.ok { color: var(--t-green); }
+    .lfs .sbx-ask { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; border-radius: 4px; background: var(--red-bg); }
+    .lfs .sbx-ask > span { flex: 1; min-width: 200px; }
+    .lfs .sbx-ask code { font-family: var(--mono); }
+    .lfs .sbx button { flex: none; min-height: 24px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--text); font: 12px var(--font); cursor: pointer; }
+    .lfs .sbx button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+    .lfs .sbx button.ghost { border-color: transparent; background: transparent; color: var(--text-2); }
+    .lfs .sbx button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+    .lfs .sbx button.primary:hover:not(:disabled) { color: #fff; filter: brightness(1.08); }
+    .lfs .sbx button:disabled { opacity: .45; cursor: not-allowed; }
   </style>
   <!-- the simulator's file helpers the view draws Files with (UMD: LayerSim, LayerFiles) -->
   <script src="/dsh/sim/simulation_engine/model.js"></script>
