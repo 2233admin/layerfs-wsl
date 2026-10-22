@@ -1,2 +1,4 @@
 *.sh text eol=lf
 ui/* text eol=lf
+bridge/*.Dockerfile text eol=lf
+fixtures/** text eol=lf
