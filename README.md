@@ -20,8 +20,8 @@ commit, merge and publish through the LayerFS JS SDK, which runs in a WSL distro
 Only `extension/` is OMP's. The bridge is a plain command (`lfs-bridge.sh <subcommand>`, one
 `docker exec` per call), so another agent harness that can run a command could drive LayerFS
 through it the way the extension does; only OMP has been run end to end. `cli` and `script`
-take any trace id (letters, digits, `.`, `_`, `-`); the page finds a session's calls only
-when its trace id is `<project>.<session>`.
+take a trace id `<project>.<session>` (the session of letters, digits, `_` and `-`; any other
+is refused): the page and `remove` find a project's traces by that prefix.
 
 Built and checked against LayerFS `5fb68dd` (the checkout at `/root/layerfs`). The page runs
 DSH host modules (`route.js`, `Collector`, `TreeReader`) and the view unbuilt from that

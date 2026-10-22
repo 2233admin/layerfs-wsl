@@ -41,8 +41,9 @@ valid_project() { [[ $1 =~ ^[a-z0-9]([a-z0-9_.-]{0,61}[a-z0-9])?$ ]]; }
 check_project() {
   valid_project "$1" || die "bad project name '$1' (a-z 0-9 _ - ., 1-63 chars, letter/digit at both ends)"
 }
+# a trace id is <project>.<session>: the page and `remove` find a project's traces by that prefix
 check_trace() {
-  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "bad trace id '$1'"
+  [[ $2 == "$1".* && ${2#"$1".} =~ ^[A-Za-z0-9_-]{1,128}$ ]] || die "bad trace id '$2': it must be $1.<session>, the session of letters, digits, '_' and '-'"
 }
 client() { echo "omp-lfs-$1"; }
 image_id() {
@@ -147,14 +148,14 @@ cmd_cli() {
   [ $# -ge 3 ] && [ "$3" = -- ] || usage
   local project=$1 trace=$2
   shift 3
-  check_project "$project"; check_trace "$trace"
+  check_project "$project"; check_trace "$project" "$trace"
   exec_agent "$project" "$trace" node "$CLI" "$@"
 }
 
 cmd_script() {
   [ $# -eq 3 ] || usage
   local project=$1 trace=$2 path
-  check_project "$project"; check_trace "$trace"
+  check_project "$project"; check_trace "$project" "$trace"
   path=$(realpath -e "$3" 2>/dev/null) || die "script '$3' not found"
   [[ $path == "$ROOT/scripts/"* ]] || die "script must live under $ROOT/scripts"
   exec_agent "$project" "$trace" node "$path"
