@@ -2,7 +2,7 @@
 Installs layerfs-wsl on Windows:
   1. a WSL distro, Arch Linux or Ubuntu 24.04 (created when missing; systemd on),
   2. inside it, install/distro-setup.sh: Docker on the distro's own container network,
-     LayerFS, images, the bridge and the page,
+     LayerFS, images, the lfs-wsl.sh command and the page,
   3. a logon task that keeps the distro running (install/keepalive.ps1),
   4. this checkout as a user-scoped OMP plugin (omp plugin link).
 Run again to resume or repair; finished steps are skipped.
@@ -60,11 +60,11 @@ if (-not $NoPlugin) {
 	if ($LASTEXITCODE -ne 0) { throw "omp plugin link exited $LASTEXITCODE" }
 }
 if ($NoPlugin) {
-	Write-Host "done. Create a project with the bridge (any agent harness; see docs\other-harnesses.md):"
+	Write-Host "done. Create a project with lfs-wsl.sh (any agent harness; see docs\other-harnesses.md):"
 	Write-Host "  wsl -d $Distro -u root --exec /opt/layerfs-wsl/lfs-wsl.sh init hello lfsb-rust-sandbox:2 /root/layerfs-wsl/fixtures/hello"
 } else {
 	$distroArg = if ($Distro -ne "layerfs-lab") { " $Distro" } else { "" }
 	Write-Host "done. In OMP, bind a folder to a new project with:"
 	Write-Host "  /layerfs init hello lfsb-rust-sandbox:2 /root/layerfs-wsl/fixtures/hello$distroArg"
-	Write-Host "Other agent harnesses use the bridge directly: docs\other-harnesses.md"
+	Write-Host "Other agent harnesses call lfs-wsl.sh directly: docs\other-harnesses.md"
 }

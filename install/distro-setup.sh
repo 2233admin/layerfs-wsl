@@ -5,10 +5,10 @@
 # running it again resumes or repairs an install.
 #
 # It installs Docker (the distro's own dockerd, under systemd) on the distro's own container
-# network (install/lfs-net.sh), the two LayerFS checkouts the bridge pins, the LayerFS core
+# network (install/lfs-net.sh), the two LayerFS checkouts lfs-wsl.sh pins, the LayerFS core
 # bundle (downloaded from this repository's release, or built with --from-source), the client
-# image, both Sandbox images, the bridge, the page and the hello fixture. Paths are the
-# bridge's and the extension's defaults.
+# image, both Sandbox images, lfs-wsl.sh, the page and the hello fixture. Paths are
+# lfs-wsl.sh's and the extension's defaults.
 set -euo pipefail
 
 CORE_REV=e49d1613f075c1e945d85adb8853fbfe9e7be7eb   # core and SDK (upstream 2e5061798 + PR #409)
@@ -169,7 +169,10 @@ for p in $(docker ps -a --filter label=lfsb.project --format '{{.Label "lfsb.pro
   [ "$have" != "$want" ] || continue
   busy=$(docker ps --filter "volume=lfsb-$p-store" --format '{{.Names}}' | grep -vx "lfsb-$p" || true)
   [ -z "$busy" ] || die "$p: Sandboxes still run ($(echo $busy)); unmount their Workspaces, wait two minutes and run this again"
-  stale="$stale $p"
+  id=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "lfsb-$p" | sed -n 's/^LAYERFS_IMAGE=//p')
+  tag=$(docker image inspect --format '{{join .RepoTags "\n"}}' "$id" 2>/dev/null | grep -m1 '^lfsb-' || true)
+  [ -n "$tag" ] || die "$p: its Sandbox image $id has no lfsb-* tag; tag it (docker tag $id lfsb-<kind>-sandbox:<n>) and run this again"
+  stale="$stale $p=$tag"
   port=$(awk -v p="$p" '$1 == p { print $2; exit }' "$old_root/ui-ports" 2>/dev/null || true)
   if [ -n "$port" ] && curl -fsS -m 2 "http://127.0.0.1:$port/bridge/whoami" 2>/dev/null | grep -q "\"project\":\"$p\""; then pages="$pages $p"; fi
 done
@@ -184,10 +187,8 @@ chmod 755 /opt/layerfs-wsl/lfs-wsl.sh.new && mv /opt/layerfs-wsl/lfs-wsl.sh.new 
 for f in server.mjs page.js index.html; do tr -d '\r' < "$REPO/ui/$f" > "$ROOT/ui/$f"; done
 [ -e "$ROOT/fixtures/hello" ] || { cp -r "$REPO/fixtures/hello" "$ROOT/fixtures/hello"; find "$ROOT/fixtures/hello" -type f -exec sed -i 's/\r$//' {} +; }
 echo "command /opt/layerfs-wsl/lfs-wsl.sh, page $ROOT/ui, fixture $ROOT/fixtures/hello"
-for p in $stale; do
-  id=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "lfsb-$p" | sed -n 's/^LAYERFS_IMAGE=//p')
-  tag=$(docker image inspect --format '{{join .RepoTags "\n"}}' "$id" 2>/dev/null | grep -m1 '^lfsb-' || true)
-  [ -n "$tag" ] || { echo "$p: no lfsb-* tag for its image $id; run: lfs-wsl.sh up $p <image>"; continue; }
+for pt in $stale; do
+  p=${pt%%=*} tag=${pt#*=}
   /opt/layerfs-wsl/lfs-wsl.sh up "$p" "$tag" </dev/null
   case " $pages " in *" $p "*) /opt/layerfs-wsl/lfs-wsl.sh ui "$p" </dev/null ;; esac
 done

@@ -822,7 +822,7 @@ export default function layerfs(pi: ExtensionAPI) {
 							`${format(r)}\nbound ${ctx.cwd} to LayerFS project ${next} (${file}), was ${b.project}. Once nothing needs ${b.project} any more: /layerfs remove ${b.project}`,
 							true,
 						);
-					} else show(r.code === 0 ? `${format(r)}\nthe bridge named no new project; binding unchanged` : format(r), false);
+					} else show(r.code === 0 ? `${format(r)}\nlfs-wsl.sh named no new project; binding unchanged` : format(r), false);
 				} else if (sub === "remove") {
 					if (rest.length !== 1) throw new Error("usage: /layerfs remove <project> (its exact name)");
 					const [project] = rest;
