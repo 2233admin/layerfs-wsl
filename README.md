@@ -127,6 +127,9 @@ pnpm: a Workspace mounts at a new `/workspaces/<N>` each time, and pnpm 11's wor
 records the absolute path it installed at, so its pre-run check would reinstall the
 committed `node_modules` in every fork. `omp-lfs-node-sandbox:3` sets
 `pnpm_config_verify_deps_before_run=false` (pnpm 11 ignores `npm_config_*` for settings).
+With that check off, pnpm no longer notices stale dependencies: a Branch that changes a
+`package.json`, `pnpm-lock.yaml` or the workspace's packages must run `pnpm install` in a
+Workspace (and commit it) before `pnpm run`.
 
 Agents then call, for example:
 
