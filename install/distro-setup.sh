@@ -61,7 +61,18 @@ fi
 # The network is set up before Docker is installed: Ubuntu's package starts dockerd at once.
 step "container network"
 install -D -m 755 <(tr -d '\r' < "$REPO/install/lfs-net.sh") /opt/layerfs-bridge/lfs-net.sh
-if [ -f /etc/layerfs-bridge/net.env ]; then
+if [ -f /etc/omp-layerfs/net.env ] && [ ! -f /etc/layerfs-bridge/net.env ]; then
+  # an install under this project's old name (omp-layerfs) with its own network: same bridge
+  # and subnet; its unit gives way to lfsb-net.service and the bridge's owner alias is renamed
+  systemctl disable omp-lfs-net.service 2>/dev/null || true
+  rm -f /etc/systemd/system/omp-lfs-net.service /etc/systemd/system/docker.service.d/omp-lfs-net.conf
+  install -D -m 644 /etc/omp-layerfs/net.env /etc/layerfs-bridge/net.env && rm -rf /etc/omp-layerfs
+  . /etc/layerfs-bridge/net.env
+  if [ "$(cat "/sys/class/net/$LFS_BRIDGE/ifalias" 2>/dev/null)" = "omp-lfs $LFS_ID" ]; then
+    ip link set "$LFS_BRIDGE" alias "lfsb $LFS_ID"
+  fi
+  echo "network of the omp-layerfs install carried over: $LFS_BRIDGE $LFS_SUBNET"
+elif [ -f /etc/layerfs-bridge/net.env ]; then
   echo "kept: $(tr '\n' ' ' < /etc/layerfs-bridge/net.env)"
 elif [ -d /var/lib/docker/network ]; then
   # an install from before lfs-net.sh, on docker0; moving it would change the bridge under its Sandboxes

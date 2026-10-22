@@ -20,6 +20,10 @@ if ($Remove) {
 	Write-Host "removed task $name"
 	return
 }
+# the same task under this project's old name (omp-layerfs) gives way to this one
+if (Get-ScheduledTask -TaskName "omp-layerfs keepalive $Distro" -ErrorAction SilentlyContinue) {
+	Unregister-ScheduledTask -TaskName "omp-layerfs keepalive $Distro" -Confirm:$false
+}
 # conhost --headless: no console window for the wsl.exe the task starts
 $action = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\conhost.exe" `
 	-Argument "--headless $env:WINDIR\System32\wsl.exe -d $Distro -u root --exec sleep infinity"
