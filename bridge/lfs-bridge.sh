@@ -15,7 +15,7 @@
 #   lfs-bridge.sh cli    <project> <trace-id> -- <lfs.js args...>   (stdin passed through)
 #   lfs-bridge.sh script <project> <trace-id> <script-path>          (under $OMP_LFS_ROOT/scripts)
 #   lfs-bridge.sh down   <project>
-#   lfs-bridge.sh ui     <project> [port]      (the LayerFS page, default port 8787)
+#   lfs-bridge.sh ui     <project> [port]      (the LayerFS page; its port is kept per project, see ui-ports)
 #   lfs-bridge.sh ui-stop <project>
 #   lfs-bridge.sh export <project> <dest-dir>  (main's files, minus /.gitignore paths)
 #   lfs-bridge.sh rotate <project> <image> [new-project]
@@ -277,6 +277,8 @@ cmd_remove() {
     rm -f "$f"
     n=$((n + 1))
   done
+  ports_lock
+  registry_drop "$project"
   echo "removed LayerFS project $project: client $name, Store volume $name-store${stopped:+, stopped Sandboxes $(echo $stopped)}, $n trace files"
 }
 
@@ -378,23 +380,78 @@ ui_pid() {
   docker exec "$1" sh -c "p=\$(cat $UI_PID 2>/dev/null) && grep -q server.mjs /proc/\$p/cmdline 2>/dev/null && echo \$p" || true
 }
 
+# ui-ports: one "<project> <port>" line per project whose page was started, kept
+# across stops and restarts so a project's page keeps its URL. The page's project
+# switcher reads it (server.mjs /omp/projects). Changed under the lock only.
+UI_PORTS=$ROOT/ui-ports
+UI_FIRST_PORT=${OMP_LFS_UI_PORT:-8787}
+ports_lock() { exec 9>"$UI_PORTS.lock"; flock 9; }
+registry_port() { [ -f "$UI_PORTS" ] && awk -v p="$1" '$1 == p { print $2; exit }' "$UI_PORTS" || true; }
+registry_owner() { [ -f "$UI_PORTS" ] && awk -v n="$1" '$2 == n { print $1; exit }' "$UI_PORTS" || true; }
+# registry_set <project> <port>: the project's one line, and nobody else's on that port.
+registry_set() {
+  local tmp=$UI_PORTS.tmp
+  { [ -f "$UI_PORTS" ] && awk -v p="$1" -v n="$2" '$1 != p && $2 != n' "$UI_PORTS"; echo "$1 $2"; } > "$tmp"
+  mv "$tmp" "$UI_PORTS"
+}
+registry_drop() {
+  [ -f "$UI_PORTS" ] || return 0
+  awk -v p="$1" '$1 != p' "$UI_PORTS" > "$UI_PORTS.tmp" && mv "$UI_PORTS.tmp" "$UI_PORTS"
+}
+port_listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+# The project whose page answers on <port> (server.mjs /omp/whoami), if any.
+page_project() { curl -fsS -m 1 "http://127.0.0.1:$1/omp/whoami" 2>/dev/null | sed -n 's/.*"project":"\([^"]*\)".*/\1/p' || true; }
+# The first port from <from> on that no other project claims and nothing listens on.
+free_port() {
+  local p owner
+  for ((p = $1; p <= 65535 && p < $1 + 500; p++)); do
+    owner=$(registry_owner "$p")
+    [ -z "$owner" ] || [ "$owner" = "$2" ] || continue
+    port_listening "$p" || { echo "$p"; return; }
+  done
+  die "no free port from $1 on"
+}
+
 # ui <project> [port]: the project's LayerFS page, started when it is not
-# running on that port (one page per client; another port restarts it).
+# running on that port (one page per client; another port restarts it). Without a
+# port, the project keeps the port it had; a new project gets the first free one
+# from $UI_FIRST_PORT, and a kept port some other program took is replaced.
 cmd_ui() {
   [ $# -ge 1 ] && [ $# -le 2 ] || usage
-  local project=$1 port=${2:-8787} name pid
+  local project=$1 want=${2:-} port name pid cur owner
   check_project "$project"
-  [[ $port =~ ^[0-9]{1,5}$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "bad port '$port'"
+  [ -z "$want" ] || { [[ $want =~ ^[0-9]{1,5}$ ]] && [ "$want" -ge 1 ] && [ "$want" -le 65535 ]; } || die "bad port '$want'"
   [ -f "$ROOT/ui/server.mjs" ] || die "$ROOT/ui/server.mjs is not installed (see README: Install)"
   name=$(running_client "$project")
+  ports_lock
   pid=$(ui_pid "$name")
-  if [ -n "$pid" ]; then
-    if [ "$(docker exec "$name" cat $UI_PORT 2>/dev/null)" = "$port" ]; then
-      echo "LayerFS page of $project already running: http://localhost:$port"
-      return
+  cur=
+  [ -z "$pid" ] || cur=$(docker exec "$name" cat $UI_PORT 2>/dev/null || true)
+  if [ -n "$want" ]; then
+    port=$want
+    owner=$(registry_owner "$port")
+    if [ -n "$owner" ] && [ "$owner" != "$project" ] && [ "$(page_project "$port")" = "$owner" ]; then
+      die "port $port serves the page of $owner; pick another port, or stop it: lfs-bridge.sh ui-stop $owner"
     fi
-    cmd_ui_stop "$project" >/dev/null
+  else
+    port=$(registry_port "$project")
+    # a page started before ui-ports existed keeps its port
+    [ -n "$port" ] || [ -z "$cur" ] || [ -n "$(registry_owner "$cur")" ] || port=$cur
+    [ -n "$port" ] || port=$(free_port "$UI_FIRST_PORT" "$project")
   fi
+  if [ -n "$pid" ] && [ "$cur" = "$port" ]; then
+    registry_set "$project" "$port"
+    echo "LayerFS page of $project already running: http://localhost:$port"
+    return
+  fi
+  [ -z "$pid" ] || cmd_ui_stop "$project" >/dev/null
+  if port_listening "$port"; then
+    [ -z "$want" ] || die "port $port is in use by another program"
+    owner=$port
+    port=$(free_port "$((port + 1))" "$project")
+    echo "port $owner of $project's page is taken by another program; moved to $port"
+  fi
+  registry_set "$project" "$port"
   docker exec -d -w "$BUNDLE" "$name" sh -c "echo \$\$ > $UI_PID; echo $port > $UI_PORT; exec node $ROOT/ui/server.mjs $project $port > $UI_LOG 2>&1"
   local i
   for i in $(seq 50); do
@@ -445,7 +502,7 @@ image_name() {
 # Store volume is gone, and clients without a Store volume.
 cmd_projects() {
   [ $# -eq 0 ] || usage
-  local root p name vol state img size up down rows= leftovers= c line
+  local root p name vol state img size up down rows= leftovers= c line page
   root=$(docker info --format '{{.DockerRootDir}}')
   echo "docker engine $(docker version --format '{{.Server.Version}}'), $root: $(df -hP "$root" | awk 'NR == 2 { print $4 " free of " $2 }')"
   for p in $( { docker volume ls --format '{{.Name}}' | sed -n 's/^omp-lfs-\(.*\)-store$/\1/p'
@@ -465,10 +522,12 @@ cmd_projects() {
     fi
     # as busy_sandboxes: created, exited and dead are stopped, any other state runs
     read -r up down < <(volume_users "$p" | awk '{ if ($2 == "created" || $2 == "exited" || $2 == "dead") d++; else u++ } END { print u + 0, d + 0 }')
-    rows+=$(printf '%s\t%s\t%s\t%s\t%s' "$p" "$state" "$img" "$size" "$up running, $down stopped")$'\n'
+    page=$(registry_port "$p")
+    if [ -n "$page" ]; then [ "$(page_project "$page")" = "$p" ] && page="http://localhost:$page" || page=":$page (stopped)"; else page=-; fi
+    rows+=$(printf '%s\t%s\t%s\t%s\t%s\t%s' "$p" "$state" "$img" "$size" "$up running, $down stopped" "$page")$'\n'
   done
   if [ -n "$rows" ]; then
-    { printf 'PROJECT\tCLIENT\tSANDBOX IMAGE\tSTORE\tSANDBOXES\n'; printf '%s' "$rows"; } | awk -F '\t' '
+    { printf 'PROJECT\tCLIENT\tSANDBOX IMAGE\tSTORE\tSANDBOXES\tPAGE\n'; printf '%s' "$rows"; } | awk -F '\t' '
       { for (i = 1; i <= NF; i++) { cell[NR, i] = $i; if (length($i) > w[i]) w[i] = length($i) } n = NF }
       END { for (r = 1; r <= NR; r++) { s = "  "; for (i = 1; i < n; i++) s = s sprintf("%-" w[i] "s  ", cell[r, i]); print s cell[r, n] } }'
   else

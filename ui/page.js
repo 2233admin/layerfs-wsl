@@ -299,6 +299,42 @@ function sandboxesView(root, name, open) {
   show(open);
 }
 
+/**
+ * The project switcher after the LayerFS mark: every project page the bridge started
+ * (server.mjs /omp/projects, from its ui-ports file). Each project's page is its own
+ * server on its own port, so picking one opens that port with the same ?pane.
+ */
+function projectSwitcher(root, name) {
+  const el = document.createElement("label");
+  el.className = "lfs-proj lfs-own";
+  el.innerHTML = `<span class="lfs-proj-k">Project</span><select aria-label="LayerFS project"></select>`;
+  const select = el.querySelector("select");
+  let pages = [{ project: name, port: Number(location.port) || 80, running: true }], drawn = "";
+  const place = () => { const logo = root.querySelector(".lfs-strip > .lfs-logo"); if (logo && logo.nextElementSibling !== el) logo.after(el); };
+  function draw() {
+    const html = pages.map((p) => `<option value="${esc(p.project)}"${p.project === name ? " selected" : ""}${p.running || p.project === name ? "" : " disabled"}>`
+      + `${esc(p.project)} · :${p.port}${p.running || p.project === name ? "" : " · stopped"}</option>`).join("");
+    if (html !== drawn) select.innerHTML = drawn = html;
+    el.title = pages.some((p) => !p.running) ? "A stopped project's page starts again with /layerfs ui in its folder" : "";
+  }
+  async function read() {
+    try { const res = await fetch("/omp/projects", { cache: "no-store" }); if (res.ok) pages = (await res.json()).projects; } catch { /* keep the last list */ }
+    draw();
+  }
+  select.addEventListener("change", () => {
+    const page = pages.find((p) => p.project === select.value);
+    if (!page || page.project === name) return;
+    location.href = `${location.protocol}//${location.hostname}:${page.port}/${location.search}`;
+  });
+  el.addEventListener("click", (e) => e.stopPropagation()); // nothing of the view's in here
+  place();
+  new MutationObserver(place).observe(root, { childList: true, subtree: false });
+  draw();
+  read();
+  setInterval(() => { if (document.visibilityState === "visible") read(); }, 10_000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") read(); });
+}
+
 // ---------------------------------------------------------------- the board
 const message = document.getElementById("message");
 const say = (text) => { message.textContent = text; message.hidden = !text; };
@@ -321,6 +357,7 @@ async function main() {
   const root = document.getElementById("lfs");
   const b = createView(root, { avatars: heroAvatars((k) => `/dsh/packages/view/src/skins/heroes/images/${k}.png`), files: FM, lineDiff: M.lineDiff, live: false, lead: "main" });
   sandboxesView(root, name, pane === "sandboxes");
+  projectSwitcher(root, name);
   let soon;
   b.rerender = () => { clearTimeout(soon); soon = setTimeout(() => b.W && b.render(), 40); };
   const files = createFilesSource((kind, query) => call(`${P(name)}/${kind}?${filesQuery(query)}`), () => b.rerender());

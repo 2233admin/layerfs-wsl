@@ -142,8 +142,9 @@ removes nothing). It needs no binding: in a folder without `.omp/layerfs.json` i
 
 ```text
 docker engine 29.9.2, /var/lib/docker: 897G free of 1007G
-  PROJECT  CLIENT   SANDBOX IMAGE           STORE  SANDBOXES
-* hello    running  omp-lfs-rust-sandbox:1  14M    0 running, 1 stopped
+  PROJECT  CLIENT   SANDBOX IMAGE           STORE  SANDBOXES             PAGE
+* hello    running  omp-lfs-rust-sandbox:1  14M    0 running, 0 stopped  http://localhost:8788
+  katana   running  omp-lfs-node-sandbox:2  1.1G   0 running, 0 stopped  http://localhost:8787
 leftovers: none
 ```
 
@@ -157,6 +158,8 @@ leftovers: none
     a while), or `none`.
   - `SANDBOXES`: the containers other than the client that use the Store volume.
     `created`, `exited` and `dead` count as stopped; any other state counts as running.
+  - `PAGE`: the project's LayerFS page: its address while it runs, `:<port> (stopped)`
+    for a kept port whose page is not running, `-` if it was never started.
 - **`leftovers`:**
   - containers labelled `layerfs.role=sandbox` whose Store volume (the one mounted at
     `/layerfs-store`) no longer exists;
@@ -216,9 +219,23 @@ wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh remove hello hello
 
 ### The LayerFS page
 
-`/layerfs ui [port]` starts the bound project's LayerFS page and prints its address,
-`http://localhost:8787` by default; `/layerfs ui stop` stops it. Without OMP:
+`/layerfs ui [port]` starts the bound project's LayerFS page and prints its address;
+`/layerfs ui stop` stops it. Without OMP:
 `wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh ui hello [port]` and `... ui-stop hello`.
+
+Each project's page is its own server in its own client container, on its own port:
+
+- **The port is kept per project** in `/root/omp-layerfs/ui-ports` (`<project> <port>`
+  lines, written under a lock), so a page keeps its address across stops and restarts.
+  Without a port, a project gets its kept port, or the first free one from 8787
+  (`OMP_LFS_UI_PORT`) that no other project keeps. A kept port another program took is
+  replaced by the next free one, and the move is printed. An explicit port that another
+  project's running page holds is refused. `remove` drops the project's line.
+- **The project switcher** after the LayerFS mark lists every project in `ui-ports`
+  (`GET /omp/projects`; each other page is asked `GET /omp/whoami`). Picking one opens
+  its port with the same `?pane`. A project whose page is not running is shown as
+  stopped and cannot be picked; start it with `/layerfs ui` in its folder.
+
 The page is DSH's own LayerFS view (`dsh/packages/view`, `dsh/packages/model`, served
 unbuilt from the checkout) with its Work | History switch: Work has the Branches with
 the agents on them, the Store's storage and the project terminal of the calls; History
@@ -243,7 +260,7 @@ JSON-only and same-origin. `?pane=work`, `?pane=history` or `?pane=sandboxes` op
   over DSH's trace `Collector` and `TreeReader`; it stands in only for what DSH's runtime
   gives them: the project binding, the SDK client (from the container's `LAYERFS_*`
   environment) and DSH's session records (none here). Its log is `/tmp/omp-lfs-ui.log`
-  in the client container. One page per project; give two projects different ports.
+  in the client container.
 - The page's own glue (`ui/page.js`) is the DSH client plugin's TypeScript (`replay.ts`,
   `playback.ts`, `storage.ts`, `LayerFsView.tsx`'s board) in plain JS without React.
   The DSH plugin's Setup, Init, project removal and Sandboxes tab are not part of it.

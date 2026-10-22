@@ -50,6 +50,10 @@
     .lfs .sbx button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
     .lfs .sbx button.primary:hover:not(:disabled) { color: #fff; filter: brightness(1.08); }
     .lfs .sbx button:disabled { opacity: .45; cursor: not-allowed; }
+    /* the project switcher after the LayerFS mark (page.js projectSwitcher) */
+    .lfs .lfs-proj { display: inline-flex; align-items: center; gap: 6px; flex: none; margin: 0 10px 0 2px; font: 11px var(--mono); color: var(--text-3); }
+    .lfs .lfs-proj select { height: 24px; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--text); font: 12px var(--mono); cursor: pointer; }
+    .lfs .lfs-proj select:hover, .lfs .lfs-proj select:focus-visible { border-color: var(--accent); outline: none; }
   </style>
   <!-- the simulator's file helpers the view draws Files with (UMD: LayerSim, LayerFiles) -->
   <script src="/dsh/sim/simulation_engine/model.js"></script>

@@ -307,11 +307,38 @@ function serveStatic(req, res, pathname) {
 collect();
 setInterval(() => { try { collect(); } catch (e) { console.error(`trace collection failed: ${e.message}`); } }, POLL_MS).unref();
 
+// ------------------------------------------------------------------ project switcher
+// Each project's page runs in its own client on its own port (one Store per client), so the
+// pages know each other only through the bridge's ui-ports file: "<project> <port>" per line.
+// A line whose port does not answer /omp/whoami with that project is a stopped page.
+const UI_PORTS = join(ROOT, "ui-ports");
+async function projectPages() {
+  const lines = existsSync(UI_PORTS) ? readFileSync(UI_PORTS, "utf8").split("\n") : [];
+  const pages = lines.map((l) => l.trim().split(/\s+/)).filter((f) => f.length === 2 && /^\d+$/.test(f[1])).map(([name, p]) => ({ project: name, port: Number(p) }));
+  if (!pages.some((p) => p.project === project)) pages.push({ project, port });
+  return Promise.all(pages.map(async (page) => {
+    if (page.project === project) return { ...page, port, running: true };
+    try {
+      const res = await fetch(`http://127.0.0.1:${page.port}/omp/whoami`, { signal: AbortSignal.timeout(800) });
+      const who = res.ok ? await res.json() : null;
+      return { ...page, running: who?.project === page.project };
+    } catch {
+      return { ...page, running: false };
+    }
+  })).then((all) => all.sort((a, b) => a.project.localeCompare(b.project)));
+}
+function sendJson(res, body) {
+  res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  res.end(JSON.stringify(body));
+}
+
 const server = createServer((req, res) => {
   const pathname = new URL(String(req.url), "http://localhost").pathname;
   if (pathname === "/layerfs" || pathname.startsWith("/layerfs/")) return route(req, res);
   const rejection = requestRejection(req);
   if (rejection !== undefined) { res.statusCode = rejection; return res.end(); }
+  if (pathname === "/omp/whoami") return sendJson(res, { project, port });
+  if (pathname === "/omp/projects") return void projectPages().then((projects) => sendJson(res, { current: project, projects }), (e) => { res.statusCode = 500; res.end(String(e.message)); });
   serveStatic(req, res, pathname);
 });
 server.listen(port, "127.0.0.1", () => console.log(`LayerFS page of project ${project}: http://localhost:${port}`));
