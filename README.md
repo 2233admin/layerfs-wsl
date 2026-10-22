@@ -18,9 +18,10 @@ commit, merge and publish through the LayerFS JS SDK, which runs in a WSL distro
   container; see [The LayerFS page](#the-layerfs-page).
 
 Only `extension/` is OMP's. The bridge is a plain command (`lfs-bridge.sh <subcommand>`, one
-`docker exec` per call; `cli` and `script` take a trace id `<project>.<session>` the caller picks), so any agent harness
-that can run a command can drive LayerFS through it, and the page shows whichever sessions
-wrote traces.
+`docker exec` per call), so another agent harness that can run a command could drive LayerFS
+through it the way the extension does; only OMP has been run end to end. `cli` and `script`
+take any trace id (letters, digits, `.`, `_`, `-`); the page finds a session's calls only
+when its trace id is `<project>.<session>`.
 
 Built and checked against LayerFS `5fb68dd` (the checkout at `/root/layerfs`). The page runs
 DSH host modules (`route.js`, `Collector`, `TreeReader`) and the view unbuilt from that
@@ -96,9 +97,9 @@ The bridge works without OMP as well:
 
 ```powershell
 wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh up hello omp-lfs-rust-sandbox:1
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli hello t1 -- status
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli hello t1 -- run feat "cargo test"
-wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh script hello t1 /root/omp-layerfs/scripts/x.mjs
+wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli hello hello.t1 -- status
+wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh cli hello hello.t1 -- run feat "cargo test"
+wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh script hello hello.t1 /root/omp-layerfs/scripts/x.mjs
 wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh down hello
 ```
 
