@@ -11,7 +11,7 @@
 // (root session or subagent of which), by which the LayerFS page names agents.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { type FileHandle, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { ExtensionAPI, ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent";
@@ -84,6 +84,14 @@ function readBinding(cwd: string): Binding {
 	const b = JSON.parse(raw) as Partial<Binding>;
 	if (!b.project || !b.image) throw new Error(`${file} must name "project" and "image"`);
 	return { distro: b.distro || DEFAULT_DISTRO, project: b.project, image: b.image };
+}
+
+/** Points the folder's binding at another project, keeping its other fields; returns the file. */
+async function rebind(cwd: string, project: string): Promise<string> {
+	const file = bindingFile(cwd);
+	const b = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+	await writeFile(file, `${JSON.stringify({ ...b, project }, null, 2)}\n`, "utf8");
+	return file;
 }
 
 /** The distro path of a Linux file, as Windows sees it. */
@@ -735,11 +743,12 @@ export default function layerfs(pi: ExtensionAPI) {
 		},
 	});
 
-	const USAGE = "usage: /layerfs init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop";
+	const USAGE =
+		"usage: /layerfs init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop | export <linux-dest-dir> | rotate [new-project] | remove <project>";
 
 	pi.registerCommand("layerfs", {
 		description:
-			"LayerFS project of this folder: init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop",
+			"LayerFS project of this folder: init <project> <image> <linux-src-dir> | status | down | log [n] | agents | ui [port] | ui stop | export <linux-dest-dir> | rotate [new-project] | remove <project>",
 		handler: async (args, ctx) => {
 			const [sub, ...rest] = String(args ?? "").trim().split(/\s+/).filter(Boolean);
 			const show = (text: string, ok: boolean) => {
@@ -772,6 +781,35 @@ export default function layerfs(pi: ExtensionAPI) {
 				} else if (sub === "down") {
 					const b = readBinding(ctx.cwd);
 					const r = await bridge(b.distro, ["down", b.project]);
+					show(format(r), r.code === 0);
+				} else if (sub === "export") {
+					if (rest.length !== 1) throw new Error("usage: /layerfs export <linux-dest-dir>");
+					const b = readBinding(ctx.cwd);
+					const r = await bridge(b.distro, ["export", b.project, rest[0]]);
+					show(format(r), r.code === 0);
+				} else if (sub === "rotate") {
+					// a new project from main's files, then this folder is bound to it; the old one is kept
+					if (rest.length > 1) throw new Error("usage: /layerfs rotate [new-project]");
+					const b = readBinding(ctx.cwd);
+					const r = await bridge(b.distro, ["rotate", b.project, b.image, ...rest]);
+					const next = r.code === 0 ? /^new project: (\S+)$/m.exec(r.stdout)?.[1] : undefined;
+					if (next) {
+						const file = await rebind(ctx.cwd, next);
+						show(
+							`${format(r)}\nbound ${ctx.cwd} to LayerFS project ${next} (${file}), was ${b.project}. Once nothing needs ${b.project} any more: /layerfs remove ${b.project}`,
+							true,
+						);
+					} else show(r.code === 0 ? `${format(r)}\nthe bridge named no new project; binding unchanged` : format(r), false);
+				} else if (sub === "remove") {
+					if (rest.length !== 1) throw new Error("usage: /layerfs remove <project> (its exact name)");
+					const [project] = rest;
+					// a folder without a binding may still remove a project of the default distro
+					const bound = existsSync(bindingFile(ctx.cwd)) ? readBinding(ctx.cwd) : undefined;
+					if (bound?.project === project)
+						throw new Error(
+							`${project} is the LayerFS project bound to this folder; rotate first (/layerfs rotate), then remove the old project`,
+						);
+					const r = await bridge(bound?.distro ?? DEFAULT_DISTRO, ["remove", project, project]);
 					show(format(r), r.code === 0);
 				} else if (sub === "log") {
 					const n = rest[0] === undefined ? 30 : Number(rest[0]);

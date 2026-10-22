@@ -58,12 +58,14 @@ Bind a folder to a project (copies a distro folder into a new LayerFS Store once
 
 This writes `.omp/layerfs.json` (`{ "distro", "project", "image" }`) in the folder;
 without it the tools refuse. `/layerfs status` lists Branches, `/layerfs down` stops the
-client container (the Store volume stays).
+client container (the Store volume stays). `/layerfs export`, `/layerfs rotate` and
+`/layerfs remove` are in [Rotating a project's Store](#rotating-a-projects-store).
 
 Build output is committed with the sources (that is what makes a new Workspace start with
 a warm `target/`). So that two Branches that both built can still merge, `init` writes a
 root `/.lww` of `%include .gitignore` when the source has none: `.gitignore` paths merge
-newer-wins instead of conflicting. They are still stored; the Store never deletes history.
+newer-wins instead of conflicting. They are still stored; the Store never deletes history
+(see [Rotating a project's Store](#rotating-a-projects-store)).
 Rust, with LayerFS 5fb68dd: merging two Branches whose `target/` holds Cargo incremental
 dirs (`target/*/incremental`) fails with `Failed: invalid record: binding kind`; the same
 builds merge once that subtree is gone. Either build in a Sandbox image with
@@ -127,6 +129,55 @@ publishes to main). Run it from `e2e/`, then the two report commands:
 cmd /c "omp -p --mode json --model smol -e ..\extension\index.ts @prompt.md < NUL > e2e-events.jsonl"
 cmd /c "omp -p --mode json -e ..\extension\index.ts ""/layerfs log 60"" < NUL > cmd-log.jsonl"
 cmd /c "omp -p --mode json -e ..\extension\index.ts ""/layerfs agents"" < NUL > cmd-agents.jsonl"
+```
+
+### Rotating a project's Store
+
+A LayerFS Store never collects garbage: every Commit, Layer and committed `target/` stays,
+so a project's Store volume only grows. Rotation replaces it with a new project seeded
+from the files of the current `main`:
+
+```text
+/layerfs rotate [new-project]
+/layerfs remove <old-project>
+```
+
+- **`/layerfs rotate`** runs the bridge's `rotate` with the binding's project and image. On
+  success it rewrites `project` in `.omp/layerfs.json` to the new project and says so. The
+  new name defaults to `<project>-r<N>` (a trailing `-r<N>` replaced, so `hello-r1` rotates
+  to `hello-r2`), with the first `N` whose container and Store volume are free.
+- **Rotation keeps only `main`'s files.** The new project starts with one `main` Layer and
+  no Branches, Commits or Layers of the old one. Branches whose head no `main` Layer's
+  source Commit reaches (through parents and merge parents) are unmerged work: `rotate`
+  prints them as `dropped` and goes on. Merge and publish what you need first. It reads
+  `main`'s newest Layers only (one bounded operator read); when older ones exist it says
+  so, and a Branch published only before them is listed as dropped too.
+- `rotate` is refused while a Sandbox of the project runs (a Sandbox closes 2 minutes
+  after its last Workspace is unmounted). It exports `main` to
+  `/root/omp-layerfs/exports/<project>-<UTC time>`, stops the Sandbox the export started,
+  runs `init` of the new project from that folder with the same image, and prints the old
+  and new project, the export folder and both Store volumes' sizes. The old project is
+  kept; the export folder is a full copy of `main`'s files that you delete yourself.
+- **`/layerfs export <linux-dest-dir>`** writes the bound project's `main` into a new or
+  empty distro folder: regular files, folders, symlinks and modes (not owners), without the
+  paths `main`'s root `/.gitignore` ignores (`target/` and the like; a `.git` folder is
+  kept). `main` cannot be mounted, so it forks a Branch `omp-export-<time>` from `main` (no
+  copy; the Branch stays in the project), mounts it and streams `tar` out of the Workspace.
+  The Sandbox image needs `tar`, and `git` when `main` has a `/.gitignore`.
+- **`/layerfs remove <project>`** needs the exact name and refuses the project bound to
+  the folder. The bridge's `remove <project> <project>` (the name twice) is refused while a
+  Sandbox of the project runs (it lists them); otherwise it removes the project's stopped
+  Sandboxes, its client container, its Store volume and its trace and `.meta.json` files.
+  Folders still bound to a removed project fail until rebound.
+- Removing a volume frees space inside the distro's ext4 disk; the distro's `ext4.vhdx` on
+  Windows does not shrink by itself (compact it with WSL's own tools).
+
+Without OMP:
+
+```powershell
+wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh export hello /root/hello-main
+wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh rotate hello omp-lfs-rust-sandbox:1
+wsl -d layerfs-lab -- /opt/omp-layerfs/lfs-bridge.sh remove hello hello
 ```
 
 ### The LayerFS page

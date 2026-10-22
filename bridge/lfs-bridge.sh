@@ -17,6 +17,9 @@
 #   lfs-bridge.sh down   <project>
 #   lfs-bridge.sh ui     <project> [port]      (the LayerFS page, default port 8787)
 #   lfs-bridge.sh ui-stop <project>
+#   lfs-bridge.sh export <project> <dest-dir>  (main's files, minus /.gitignore paths)
+#   lfs-bridge.sh rotate <project> <image> [new-project]
+#   lfs-bridge.sh remove <project> <project>   (the name twice, to confirm)
 #
 # env: LFS_TRACE_STEP labels this call's SDK trace lines (DSH_LAYERFS_TRACE_STEP).
 set -euo pipefail
@@ -31,7 +34,7 @@ CLI=$LAYERFS/dsh/packages/host/src/lfs.js
 SKILL=$LAYERFS/.agents/skills/layerfs-js-sdk/SKILL.md
 
 die() { echo "lfs-bridge: $*" >&2; exit 64; }
-usage() { sed -n '12,20p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
+usage() { sed -n '12,23p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
 
 check_project() {
   [[ $1 =~ ^[a-z0-9]([a-z0-9_.-]{0,61}[a-z0-9])?$ ]] || die "bad project name '$1' (a-z 0-9 _ - ., 1-63 chars, letter/digit at both ends)"
@@ -164,6 +167,214 @@ cmd_down() {
   echo "client $name stopped (Store volume $name-store kept)"
 }
 
+project_exists() { docker inspect "$(client "$1")" >/dev/null 2>&1 || docker volume inspect "$(client "$1")-store" >/dev/null 2>&1; }
+
+# Containers other than the client that use the project's Store volume (its
+# Sandboxes, and what failed starts left), one "<name> <state>" per line.
+volume_users() {
+  local name
+  name=$(client "$1")
+  docker ps -a --filter "volume=$name-store" --format '{{.Names}} {{.State}}' | awk -v c="$name" '$1 != c'
+}
+
+# Names of the project's containers that still run something (DSH's remove.js:
+# any state but created, exited or dead).
+busy_sandboxes() {
+  volume_users "$1" | awk '$2 != "created" && $2 != "exited" && $2 != "dead" { print $1 }'
+}
+
+refuse_busy() {
+  local busy
+  busy=$(busy_sandboxes "$1")
+  [ -z "$busy" ] || die "$2 refused: running Sandboxes still use $(client "$1")-store: $(echo $busy). A Sandbox closes 2 minutes after its last Workspace is unmounted; unmount the Workspaces (or wait) and run it again"
+}
+
+# export <project> <dest-dir>: main's files (regular files, folders, symlinks and
+# their modes; owners are not kept) into a new or empty distro folder, without
+# the paths main's root /.gitignore ignores. main cannot be mounted, so a throwaway
+# Branch omp-export-<time> forked from it is (forking copies nothing; the Branch
+# stays in the project, which has no Branch removal). In its Workspace, tar writes
+# the tree to stdout, which workspace.exec streams raw to this process's tar. The
+# Sandbox image needs tar, and git when main has a /.gitignore.
+cmd_export() {
+  [ $# -eq 2 ] || usage
+  local project=$1 dest=$2 name created=0 rc=0 cmd js
+  check_project "$project"
+  [[ $dest == /* ]] || die "destination '$dest' must be an absolute distro path"
+  if [ -e "$dest" ]; then
+    [ -d "$dest" ] && [ -z "$(ls -A "$dest")" ] || die "destination '$dest' is not an empty folder"
+  else
+    mkdir -p "$dest"
+    created=1
+  fi
+  name=$(running_client "$project")
+  # Run by bash -c at the Workspace root. git lists the ignored paths, ignored
+  # folders as one entry ("target/"); git never lists a .git folder, so it is kept.
+  IFS= read -r -d '' cmd <<'EOF' || true
+set -euo pipefail
+command -v tar >/dev/null || { echo "export: the Sandbox image has no tar" >&2; exit 3; }
+x=$(mktemp)
+if [ -f .gitignore ]; then
+  command -v git >/dev/null || { echo "export: the Sandbox image has no git, needed to read /.gitignore" >&2; exit 3; }
+  g=$(mktemp -d)
+  git -c safe.directory='*' --git-dir="$g" init -q
+  git -c safe.directory='*' --git-dir="$g" --work-tree=. ls-files -z --others --ignored --directory --exclude-from=.gitignore >"$x.z"
+  while IFS= read -r -d '' p; do
+    case $p in *$'\n'*) echo "export: an ignored path has a newline in its name: $p" >&2; exit 3 ;; esac
+    printf './%s\n' "${p%/}"
+  done <"$x.z" >"$x"
+fi
+tar --anchored --no-wildcards --exclude-from="$x" -cf - .
+EOF
+  IFS= read -r -d '' js <<'EOF' || true
+const { LayerFS } = await import(process.env.SDK);
+const lf = new LayerFS(process.env.P);
+let ws;
+try {
+  await lf.branch.fork(process.env.BRANCH, "main");
+  ws = await lf.workspace.mount(process.env.BRANCH);
+  const r = await lf.workspace.exec(ws, process.env.CMD, "omp-layerfs export", { stdout: process.stdout, stderr: process.stderr });
+  if (r.exitCode !== 0) { console.error(`export: the Workspace command exited ${r.exitCode}`); process.exitCode = 2; }
+} catch (e) {
+  console.error(`${e.code ?? "Error"}: ${e.message}`);
+  process.exitCode = 2;
+} finally {
+  if (ws) await lf.workspace.unmount(ws, true).catch((e) => console.error(`export: could not unmount ${ws.path}: ${e.message}`));
+  await lf.close();
+}
+EOF
+  docker exec -w "$BUNDLE" -e P="$project" -e SDK="$SDK" -e BRANCH="omp-export-$(date -u +%Y%m%d-%H%M%S)-$$" -e CMD="$cmd" \
+    "$name" node --input-type=module -e "$js" | tar -xpf - --no-same-owner -C "$dest" || rc=$?
+  if [ $rc -ne 0 ]; then
+    if [ $created = 1 ]; then rm -rf "$dest"; else find "$dest" -mindepth 1 -delete; fi
+    die "export of $project failed (exit $rc); $dest left as it was"
+  fi
+  echo "exported main of $project to $dest: $(find "$dest" -mindepth 1 | wc -l) entries, $(du -sh "$dest" | cut -f1)"
+}
+
+# remove <project> <project>: the project's stopped Sandboxes, client container and
+# Store volume, and its trace files; refused while a Sandbox runs (DSH's remove.js).
+cmd_remove() {
+  [ $# -eq 2 ] || usage
+  local project=$1 name f rest stopped n=0
+  check_project "$project"
+  [ "$2" = "$project" ] || die "remove refused: the confirmation '$2' is not the project name; to remove it, run: lfs-bridge.sh remove $project $project"
+  name=$(client "$project")
+  project_exists "$project" || die "no LayerFS project $project here (no container $name, no volume $name-store)"
+  refuse_busy "$project" remove
+  stopped=$(volume_users "$project" | awk '{ print $1 }')
+  [ -z "$stopped" ] || docker rm $stopped >/dev/null
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  ! docker volume inspect "$name-store" >/dev/null 2>&1 || docker volume rm "$name-store" >/dev/null
+  # trace ids are <project>.<session>, the session part without dots
+  for f in "$ROOT/traces/$project".*; do
+    rest=${f##*/}
+    rest=${rest#"$project".}
+    case $rest in *.meta.json) rest=${rest%.meta.json} ;; *.jsonl) rest=${rest%.jsonl} ;; *) continue ;; esac
+    [[ -n $rest && $rest != *.* ]] || continue
+    rm -f "$f"
+    n=$((n + 1))
+  done
+  echo "removed LayerFS project $project: client $name, Store volume $name-store${stopped:+, stopped Sandboxes $(echo $stopped)}, $n trace files"
+}
+
+# The size of a project's Store volume, as du -sh gives it.
+store_size() {
+  local out
+  out=$(docker exec "$(client "$1")" du -sh /layerfs-store)
+  echo "${out%%$'\t'*}"
+}
+
+# rotate <project> <image> [new-project]: a new project seeded from main's files (the
+# export), with no Branches and no history; the old project is kept for `remove`.
+# The default name is <project>-r<N> (a trailing -r<N> of <project> replaced), with
+# the first N whose container and Store volume are free.
+cmd_rotate() {
+  [ $# -ge 2 ] && [ $# -le 3 ] || usage
+  local project=$1 image=$2 new=${3:-} name stem n dest before after started js
+  check_project "$project"
+  image_id "$image" >/dev/null
+  name=$(client "$project")
+  if [ -z "$new" ]; then
+    stem=$project
+    if [[ $project =~ ^(.+)-r[0-9]+$ ]]; then stem=${BASH_REMATCH[1]}; fi
+    n=1
+    while project_exists "$stem-r$n"; do n=$((n + 1)); done
+    new=$stem-r$n
+  fi
+  check_project "$new"
+  [ "$new" != "$project" ] || die "the new project must have another name than $project"
+  ! project_exists "$new" || die "project $new already exists here (container or Store volume $(client "$new")-store); pick another name"
+  running_client "$project" >/dev/null
+  refuse_busy "$project" rotate
+  echo "rotating LayerFS project $project -> $new"
+  # Branches whose head no main Layer's source Commit reaches (by parents and merge
+  # parents) are dropped work. The commit graph is every Branch's first-parent line.
+  IFS= read -r -d '' js <<'EOF' || true
+const { LayerFS } = await import(process.env.SDK);
+const { LayerFSOperator } = await import(process.env.OPERATOR);
+const lf = new LayerFS(process.env.P);
+try {
+  const branches = [];
+  for (let pos = 0; ; ) {
+    const p = await lf.project.list_branches(1000, pos);
+    branches.push(...p.items.filter((b) => b.name !== "main"));
+    if (!p.hasMore) break;
+    pos = p.nextPagePos ?? pos + p.items.length;
+  }
+  const commits = new Map();
+  for (const b of branches) {
+    if (!b.head || commits.has(b.head)) continue;
+    load: for (let pos = 0; ; ) {
+      const p = await lf.branch.list_commits(b.name, 200, pos);
+      for (const c of p.items) {
+        if (commits.has(c.id)) break load; // its first-parent line is loaded already
+        commits.set(c.id, c);
+      }
+      if (!p.hasMore) break;
+      pos = p.nextPagePos ?? pos + p.items.length;
+    }
+  }
+  const history = await new LayerFSOperator(lf).inspect.snapshot();
+  const onMain = new Set();
+  const next = history.layers.map((l) => l.sourceCommit).filter(Boolean);
+  while (next.length) {
+    const id = next.pop();
+    if (onMain.has(id)) continue;
+    onMain.add(id);
+    const c = commits.get(id);
+    if (c) next.push(...[c.parent, c.secondParent].filter(Boolean));
+  }
+  const dropped = branches.filter((b) => b.head && !onMain.has(b.head)).map((b) => b.name);
+  const rest = branches.filter((b) => !dropped.includes(b.name)).map((b) => b.name);
+  console.log(`dropped (head not on main's history): ${dropped.join(", ") || "none"}`);
+  if (rest.length) console.log(`also not carried over (on main's history or without Commits): ${rest.join(", ")}`);
+  if (history.moreLayers) console.log(`note: only main's newest ${history.layers.length} Layers were read; a Branch published only before them is listed as dropped too`);
+} finally {
+  await lf.close();
+}
+EOF
+  docker exec -w "$BUNDLE" -e P="$project" -e SDK="$SDK" -e OPERATOR="$OPERATOR" "$name" node --input-type=module -e "$js"
+  mkdir -p "$ROOT/exports"
+  dest=$ROOT/exports/$project-$(date -u +%Y%m%dT%H%M%SZ)
+  cmd_export "$project" "$dest"
+  # No Sandbox ran before the export; the one it started would hold the volume
+  # for 2 idle minutes, refusing `remove`.
+  started=$(busy_sandboxes "$project")
+  if [ -n "$started" ]; then
+    docker stop $started >/dev/null
+    echo "stopped the export's Sandbox: $(echo $started)"
+  fi
+  before=$(store_size "$project")
+  cmd_init "$new" "$image" "$dest" || die "init of $new from $dest failed; $project is unchanged and the export is kept"
+  after=$(store_size "$new")
+  echo "rotated: $project -> $new"
+  echo "  old: $project, Store volume $name-store, $before (kept; remove it with: lfs-bridge.sh remove $project $project)"
+  echo "  new: $new, Store volume $(client "$new")-store, $after"
+  echo "  export: $dest (a full copy of main's files; delete it yourself)"
+  echo "new project: $new"
+}
+
 # The page's server (ui/server.mjs, installed under $ROOT/ui) runs detached in
 # the client; its pid, port and log are in the client's /tmp.
 UI_PID=/tmp/omp-lfs-ui.pid UI_PORT=/tmp/omp-lfs-ui.port UI_LOG=/tmp/omp-lfs-ui.log
@@ -226,4 +437,7 @@ case $sub in
   down) cmd_down "$@" ;;
   ui) cmd_ui "$@" ;;
   ui-stop) cmd_ui_stop "$@" ;;
+  export) cmd_export "$@" ;;
+  rotate) cmd_rotate "$@" ;;
+  remove) cmd_remove "$@" ;;
 esac
