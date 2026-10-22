@@ -1,25 +1,25 @@
 #!/bin/bash
 # migrate-from-omp-layerfs.sh: move a distro's install of omp-layerfs (this project's old name)
-# to layerfs-bridge, as root, after distro-setup.sh has installed /opt/layerfs-bridge.
+# to layerfs-wsl, as root, after distro-setup.sh has installed /opt/layerfs-wsl.
 # distro-setup.sh runs it when it finds /opt/omp-layerfs/lfs-bridge.sh. Safe to run again:
 # it resumes where it stopped.
 #
 # Per project (each Store volume omp-lfs-<project>-store), with the old bridge:
 #   1. note the client's Sandbox image and whether it has a page (kept in
-#      /root/layerfs-bridge/migrate/<project>.env, so a rerun still knows them)
+#      /root/layerfs-wsl/migrate/<project>.env, so a rerun still knows them)
 #   2. stop its page; list its Sandboxes, which reclaims the idle closed ones; refuse while a
 #      Sandbox runs or a sandbox.record remains (the record names the old container and
 #      volume, and the Store would not open cleanly under the new names)
 #   3. remove the old client container, so the Store is closed while it is copied
 #   4. copy the volume to lfsb-<project>-store, compare file count and bytes, and mark it
 #      done (migrate/<project>.done); a copy without the mark is made again
-# Only when every project is done: move /root/omp-layerfs into /root/layerfs-bridge, tag the
+# Only when every project is done: move /root/omp-layerfs into /root/layerfs-wsl, tag the
 # images omp-lfs-* as lfsb-*, start each client again with the new bridge (and its page) and
 # remove /opt/omp-layerfs. The old volumes are kept: `docker volume rm omp-lfs-<project>-store`
 # once the projects work under the new names.
 set -euo pipefail
-OLD=/opt/omp-layerfs/lfs-bridge.sh NEW=/opt/layerfs-bridge/lfs-bridge.sh
-OLD_ROOT=/root/omp-layerfs NEW_ROOT=/root/layerfs-bridge STATE=/root/layerfs-bridge/migrate
+OLD=/opt/omp-layerfs/lfs-bridge.sh NEW=/opt/layerfs-wsl/lfs-wsl.sh
+OLD_ROOT=/root/omp-layerfs NEW_ROOT=/root/layerfs-wsl STATE=/root/layerfs-wsl/migrate
 RUNTIME_IMAGE=layerfs-352-runtime:node24
 die() { echo "migrate: $*" >&2; exit 1; }
 in_volume() { docker run --rm --network none -v "$1":/s:ro "$RUNTIME_IMAGE" sh -c "$2"; }

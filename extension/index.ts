@@ -1,11 +1,11 @@
 // OMP extension: work on a LayerFS project the way DSH agents do, through the
-// LayerFS JS SDK running in a WSL distro (see ../bridge/lfs-bridge.sh).
+// LayerFS JS SDK running in a WSL distro (see ../bridge/lfs-wsl.sh).
 //
 // The folder's binding is <cwd>/.omp/layerfs.json:
 //   { "distro": "layerfs-lab", "project": "hello", "image": "lfsb-rust-sandbox:1" }
 // Every call runs the bridge with trace id `<project>.<session-id>`, so each
 // agent (a task subagent has its own session) gets its own SDK trace file
-// /root/layerfs-bridge/traces/<project>.<session-id>.jsonl in the distro. The SDK's
+// /root/layerfs-wsl/traces/<project>.<session-id>.jsonl in the distro. The SDK's
 // trace lines do not name the project; the file name does.
 // Beside it, <project>.<session-id>.meta.json records the session's lineage
 // (root session or subagent of which), by which the LayerFS page names agents.
@@ -16,8 +16,8 @@ import { type FileHandle, mkdir, open, readdir, readFile, rename, stat, unlink, 
 import * as path from "node:path";
 import type { ExtensionAPI, ReadonlySessionManager } from "@oh-my-pi/pi-coding-agent";
 
-const BRIDGE = "/opt/layerfs-bridge/lfs-bridge.sh";
-const ROOT = "/root/layerfs-bridge";
+const BRIDGE = "/opt/layerfs-wsl/lfs-wsl.sh";
+const ROOT = "/root/layerfs-wsl";
 const TRACES = `${ROOT}/traces`;
 const DEFAULT_DISTRO = "layerfs-lab";
 /** The SDK guide in the bridge's core checkout (LFSB_CHECKOUT default /root/layerfs-next). */
@@ -27,9 +27,9 @@ const STREAM_LIMIT = 60_000;
 /** The SDK cuts trace step labels to this many characters (sdk/js/src/trace.js). */
 const STEP_LIMIT = 200;
 /** Custom session entry of one traced LayerFS call. */
-const CALL_ENTRY = "layerfs-bridge.call";
+const CALL_ENTRY = "layerfs-wsl.call";
 /** Custom session entry recording the project line given to a session. */
-const PROMPT_ENTRY = "layerfs-bridge.prompt";
+const PROMPT_ENTRY = "layerfs-wsl.prompt";
 
 interface Binding {
 	distro: string;
@@ -642,7 +642,7 @@ export default function layerfs(pi: ExtensionAPI) {
 	const z = pi.zod;
 	pi.setLabel("LayerFS");
 
-	/** Sessions already given a layerfs-bridge.prompt entry, by session id + project. */
+	/** Sessions already given a layerfs-wsl.prompt entry, by session id + project. */
 	const prompted = new Set<string>();
 
 	// DSH puts the conversation's project in every agent's runtime context; so do we,
@@ -667,7 +667,7 @@ export default function layerfs(pi: ExtensionAPI) {
 	/**
 	 * Runs one bridge call for a tool and returns the tool result: the output
 	 * text, and in `details.layerfs` the call's traced SDK calls, each also kept
-	 * in the session as a layerfs-bridge.call entry. A nonzero exit is an error
+	 * in the session as a layerfs-wsl.call entry. A nonzero exit is an error
 	 * result carrying the same text and records.
 	 */
 	async function traced(

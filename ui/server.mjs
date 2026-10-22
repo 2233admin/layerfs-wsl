@@ -1,5 +1,5 @@
-// The LayerFS Work/History/Sandboxes page for one project of layerfs-bridge, without DeepSeek Harness.
-// Runs in the project's client container (lfs-bridge.sh ui <project> [port]),
+// The LayerFS Work/History/Sandboxes page for one project of layerfs-wsl, without DeepSeek Harness.
+// Runs in the project's client container (lfs-wsl.sh ui <project> [port]),
 // which has the SDK's LAYERFS_* deployment, both LayerFS checkouts read-only and
 // the trace folder at its own path. Two checkouts, both named in the client's
 // environment by the bridge: the core one (LFSB_CHECKOUT) gives the SDK and
@@ -41,7 +41,7 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
-const env = (name) => process.env[name] || (console.error(`server.mjs: ${name} is not set; start the page with lfs-bridge.sh ui`), process.exit(64));
+const env = (name) => process.env[name] || (console.error(`server.mjs: ${name} is not set; start the page with lfs-wsl.sh ui`), process.exit(64));
 const LAYERFS = env("LFSB_CHECKOUT");
 const ROOT = env("LFSB_ROOT");
 const DSH = join(env("LFSB_UI_CHECKOUT"), "dsh");

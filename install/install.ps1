@@ -1,5 +1,5 @@
 <#
-Installs layerfs-bridge on Windows:
+Installs layerfs-wsl on Windows:
   1. a WSL distro, Arch Linux or Ubuntu 24.04 (created when missing; systemd on),
   2. inside it, install/distro-setup.sh: Docker on the distro's own container network,
      LayerFS, images, the bridge and the page,
@@ -55,16 +55,16 @@ Write-Host "== keeping $Distro running while you are logged on"
 & (Join-Path $PSScriptRoot "keepalive.ps1") -Distro $Distro
 
 if (-not $NoPlugin) {
-	Write-Host "== linking $repo as the OMP plugin layerfs-bridge"
+	Write-Host "== linking $repo as the OMP plugin layerfs-wsl"
 	& omp plugin link $repo
 	if ($LASTEXITCODE -ne 0) { throw "omp plugin link exited $LASTEXITCODE" }
 }
 if ($NoPlugin) {
 	Write-Host "done. Create a project with the bridge (any agent harness; see docs\other-harnesses.md):"
-	Write-Host "  wsl -d $Distro -u root --exec /opt/layerfs-bridge/lfs-bridge.sh init hello lfsb-rust-sandbox:2 /root/layerfs-bridge/fixtures/hello"
+	Write-Host "  wsl -d $Distro -u root --exec /opt/layerfs-wsl/lfs-wsl.sh init hello lfsb-rust-sandbox:2 /root/layerfs-wsl/fixtures/hello"
 } else {
 	$distroArg = if ($Distro -ne "layerfs-lab") { " $Distro" } else { "" }
 	Write-Host "done. In OMP, bind a folder to a new project with:"
-	Write-Host "  /layerfs init hello lfsb-rust-sandbox:2 /root/layerfs-bridge/fixtures/hello$distroArg"
+	Write-Host "  /layerfs init hello lfsb-rust-sandbox:2 /root/layerfs-wsl/fixtures/hello$distroArg"
 	Write-Host "Other agent harnesses use the bridge directly: docs\other-harnesses.md"
 }

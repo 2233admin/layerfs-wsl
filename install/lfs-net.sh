@@ -10,13 +10,13 @@
 #   pick  print "<bridge> <subnet> <id>" for a new install: a random id, the bridge named
 #         lfs-<id> and a subnet 10.64-127.x.0/24 derived from it (the first one from there no
 #         address or route uses); stored in net.env, they stay this distro's while it is down
-#   up    create the bridge from /etc/layerfs-bridge/net.env and add the rules (idempotent);
+#   up    create the bridge from /etc/layerfs-wsl/net.env and add the rules (idempotent);
 #         the bridge carries this distro's id as its alias, and a bridge of that name owned
 #         by another distro is refused, never shared
 #   down  remove the rules and the bridge, if the bridge is this distro's
 # Run by lfsb-net.service before docker.service.
 set -euo pipefail
-ENV=/etc/layerfs-bridge/net.env
+ENV=/etc/layerfs-wsl/net.env
 
 die() { echo "lfs-net: $*" >&2; exit 1; }
 

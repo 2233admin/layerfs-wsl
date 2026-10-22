@@ -1,5 +1,5 @@
 #!/bin/bash
-# lfs-bridge.sh: layerfs-bridge, any agent harness's bridge to a LayerFS project in this
+# lfs-wsl.sh: layerfs-wsl, any agent harness's bridge to a LayerFS project in this
 # WSL distro (DSH has its own integration; this is for the others).
 #
 # One long-lived SDK client container per project (lfsb-<project>), set up
@@ -11,17 +11,17 @@
 # are passed through.
 #
 # usage:
-#   lfs-bridge.sh up     <project> <image>
-#   lfs-bridge.sh init   <project> <image> <linux-src-dir>
-#   lfs-bridge.sh cli    <project> <trace-id> -- <lfs.js args...>   (stdin passed through)
-#   lfs-bridge.sh script <project> <trace-id> <script-path>          (under $LFSB_ROOT/scripts)
-#   lfs-bridge.sh down   <project>
-#   lfs-bridge.sh ui     <project> [port]      (the LayerFS page; its port is kept per project, see ui-ports)
-#   lfs-bridge.sh ui-stop <project>
-#   lfs-bridge.sh export <project> <dest-dir>  (main's files, minus /.gitignore paths)
-#   lfs-bridge.sh rotate <project> <image> [new-project]
-#   lfs-bridge.sh remove <project> <project>   (the name twice, to confirm)
-#   lfs-bridge.sh projects                     (every project here, read-only)
+#   lfs-wsl.sh up     <project> <image>
+#   lfs-wsl.sh init   <project> <image> <linux-src-dir>
+#   lfs-wsl.sh cli    <project> <trace-id> -- <lfs.js args...>   (stdin passed through)
+#   lfs-wsl.sh script <project> <trace-id> <script-path>          (under $LFSB_ROOT/scripts)
+#   lfs-wsl.sh down   <project>
+#   lfs-wsl.sh ui     <project> [port]      (the LayerFS page; its port is kept per project, see ui-ports)
+#   lfs-wsl.sh ui-stop <project>
+#   lfs-wsl.sh export <project> <dest-dir>  (main's files, minus /.gitignore paths)
+#   lfs-wsl.sh rotate <project> <image> [new-project]
+#   lfs-wsl.sh remove <project> <project>   (the name twice, to confirm)
+#   lfs-wsl.sh projects                     (every project here, read-only)
 #
 # env: LFS_TRACE_STEP labels this call's SDK trace lines (DSH_LAYERFS_TRACE_STEP).
 #
@@ -37,7 +37,7 @@ set -euo pipefail
 BUNDLE=${LFSB_BUNDLE:-/root/layerfs-next-bundle}
 LAYERFS=${LFSB_CHECKOUT:-/root/layerfs-next}
 UI_LAYERFS=${LFSB_UI_CHECKOUT:-/root/layerfs}
-ROOT=${LFSB_ROOT:-/root/layerfs-bridge}
+ROOT=${LFSB_ROOT:-/root/layerfs-wsl}
 RUNTIME_IMAGE=${LFSB_RUNTIME_IMAGE:-layerfs-352-runtime:node24}
 SDK=file://$LAYERFS/sdk/js/src/index.js
 OPERATOR=file://$LAYERFS/sdk/js/operator/index.js
@@ -45,7 +45,7 @@ CLI=$LAYERFS/dsh/packages/host/src/lfs.js
 SKILL=$LAYERFS/.agents/skills/layerfs-js-sdk/SKILL.md
 CORE="$BUNDLE $LAYERFS $UI_LAYERFS $ROOT"
 
-die() { echo "lfs-bridge: $*" >&2; exit 64; }
+die() { echo "lfs-wsl: $*" >&2; exit 64; }
 usage() { sed -n '12,24p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
 
 valid_project() { [[ $1 =~ ^[a-z0-9]([a-z0-9_.-]{0,61}[a-z0-9])?$ ]]; }
@@ -140,10 +140,10 @@ running_client() {
   case $(docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null || echo missing) in
     true) ;;
     false) docker start "$name" >/dev/null ;;
-    *) die "project '$1' has no client container; run: lfs-bridge.sh init $1 <image> <src-dir> (or up)" ;;
+    *) die "project '$1' has no client container; run: lfs-wsl.sh init $1 <image> <src-dir> (or up)" ;;
   esac
   have=$(client_core "$name")
-  [ "$have" = "$CORE" ] || die "client $name was made for [$have] (bundle, checkout, page checkout, state folder), this bridge uses [$CORE]: run lfs-bridge.sh up $1 <image> to recreate it (refused while its Sandboxes run: unmount their Workspaces first), or set LFSB_BUNDLE, LFSB_CHECKOUT, LFSB_UI_CHECKOUT and LFSB_ROOT to the client's"
+  [ "$have" = "$CORE" ] || die "client $name was made for [$have] (bundle, checkout, page checkout, state folder), this bridge uses [$CORE]: run lfs-wsl.sh up $1 <image> to recreate it (refused while its Sandboxes run: unmount their Workspaces first), or set LFSB_BUNDLE, LFSB_CHECKOUT, LFSB_UI_CHECKOUT and LFSB_ROOT to the client's"
   echo "$name"
 }
 
@@ -173,7 +173,7 @@ cmd_init() {
   # upstream default is to merge every .gitignore path newer-wins.
   docker exec "$name" sh -c '[ -e "$1/.lww" ] || printf "%%include .gitignore\n" >"$1/.lww"' sh "$tmp"
   docker exec "$name" sh -c '[ -e "$1/.gitignore" ]' sh "$tmp" \
-    || echo "lfs-bridge: $src has no .gitignore; /.lww includes nothing until one is added" >&2
+    || echo "lfs-wsl: $src has no .gitignore; /.lww includes nothing until one is added" >&2
   local rc=0
   docker exec -w "$BUNDLE" -e P="$project" -e SRC="$tmp" -e SDK="$SDK" "$name" node --input-type=module -e '
     const { LayerFS } = await import(process.env.SDK);
@@ -281,7 +281,7 @@ let ws;
 try {
   await lf.branch.fork(process.env.BRANCH, "main");
   ws = await lf.workspace.mount(process.env.BRANCH);
-  const r = await lf.workspace.exec(ws, process.env.CMD, "layerfs-bridge export", { stdout: process.stdout, stderr: process.stderr });
+  const r = await lf.workspace.exec(ws, process.env.CMD, "layerfs-wsl export", { stdout: process.stdout, stderr: process.stderr });
   if (r.exitCode !== 0) { console.error(`export: the Workspace command exited ${r.exitCode}`); process.exitCode = 2; }
 } catch (e) {
   console.error(`${e.code ?? "Error"}: ${e.message}`);
@@ -306,7 +306,7 @@ cmd_remove() {
   [ $# -eq 2 ] || usage
   local project=$1 name f rest stopped n=0
   check_project "$project"
-  [ "$2" = "$project" ] || die "remove refused: the confirmation '$2' is not the project name; to remove it, run: lfs-bridge.sh remove $project $project"
+  [ "$2" = "$project" ] || die "remove refused: the confirmation '$2' is not the project name; to remove it, run: lfs-wsl.sh remove $project $project"
   name=$(client "$project")
   project_exists "$project" || die "no LayerFS project $project here (no container $name, no volume $name-store)"
   refuse_busy "$project" remove
@@ -412,7 +412,7 @@ EOF
   cmd_init "$new" "$image" "$dest" || die "init of $new from $dest failed; $project is unchanged and the export is kept"
   after=$(store_size "$new")
   echo "rotated: $project -> $new"
-  echo "  old: $project, Store volume $name-store, $before (kept; remove it with: lfs-bridge.sh remove $project $project)"
+  echo "  old: $project, Store volume $name-store, $before (kept; remove it with: lfs-wsl.sh remove $project $project)"
   echo "  new: $new, Store volume $(client "$new")-store, $after"
   echo "  export: $dest (a full copy of main's files; delete it yourself)"
   echo "new project: $new"
@@ -479,7 +479,7 @@ cmd_ui() {
     port=$want
     owner=$(registry_owner "$port")
     if [ -n "$owner" ] && [ "$owner" != "$project" ] && [ "$(page_project "$port")" = "$owner" ]; then
-      die "port $port serves the page of $owner; pick another port, or stop it: lfs-bridge.sh ui-stop $owner"
+      die "port $port serves the page of $owner; pick another port, or stop it: lfs-wsl.sh ui-stop $owner"
     fi
   else
     port=$(registry_port "$project")

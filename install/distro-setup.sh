@@ -1,5 +1,5 @@
 #!/bin/bash
-# distro-setup.sh [--from-source]: set up layerfs-bridge in an Arch Linux or Ubuntu (22.04 or
+# distro-setup.sh [--from-source]: set up layerfs-wsl in an Arch Linux or Ubuntu (22.04 or
 # later; tested on 24.04) WSL distro, as root.
 # Run from this checkout (install.ps1 does); every step is skipped when already done, so
 # running it again resumes or repairs an install.
@@ -16,11 +16,11 @@ UI_REV=5fb68ddc1acc3163e3ac3486133bde014c5fbed3     # the page's DSH host and vi
 UPSTREAM=https://github.com/Ephemeral-AI-Lab/layerfs.git
 FORK=https://github.com/2233admin/layerfs.git        # holds CORE_REV until #409 is merged
 FORK_BRANCH=fix/merge-binding-kind
-BUNDLE_URL=https://github.com/2233admin/layerfs-bridge/releases/download/core-e49d1613f/layerfs-bundle-e49d1613f.tar.gz
+BUNDLE_URL=https://github.com/2233admin/layerfs-wsl/releases/download/core-e49d1613f/layerfs-bundle-e49d1613f.tar.gz
 BUNDLE_SHA256=c0b46bf01f082e8ab973e61eb04c786c43d889460c0a656105ad4553f73519ee
 
 SRC=/root/layerfs-upstream CORE=/root/layerfs-next BUNDLE=/root/layerfs-next-bundle UI=/root/layerfs
-ROOT=/root/layerfs-bridge RUNTIME_IMAGE=layerfs-352-runtime:node24
+ROOT=/root/layerfs-wsl RUNTIME_IMAGE=layerfs-352-runtime:node24
 RUST_IMAGE=lfsb-rust-sandbox:2 NODE_IMAGE=lfsb-node-sandbox:3
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
 
@@ -60,43 +60,48 @@ fi
 # chains. This distro's dockerd gets a bridge of its own and leaves iptables to lfs-net.sh.
 # The network is set up before Docker is installed: Ubuntu's package starts dockerd at once.
 step "container network"
-install -D -m 755 <(tr -d '\r' < "$REPO/install/lfs-net.sh") /opt/layerfs-bridge/lfs-net.sh
-if [ -f /etc/omp-layerfs/net.env ] && [ ! -f /etc/layerfs-bridge/net.env ]; then
+# an install under the name layerfs-bridge keeps its network: its net.env moves with the name
+if [ -d /etc/layerfs-bridge ] && [ ! -e /etc/layerfs-wsl ]; then
+  mv /etc/layerfs-bridge /etc/layerfs-wsl
+  echo "network of the layerfs-bridge install carried over"
+fi
+install -D -m 755 <(tr -d '\r' < "$REPO/install/lfs-net.sh") /opt/layerfs-wsl/lfs-net.sh
+if [ -f /etc/omp-layerfs/net.env ] && [ ! -f /etc/layerfs-wsl/net.env ]; then
   # an install under this project's old name (omp-layerfs) with its own network: same bridge
   # and subnet; its unit gives way to lfsb-net.service and the bridge's owner alias is renamed
   systemctl disable omp-lfs-net.service 2>/dev/null || true
   rm -f /etc/systemd/system/omp-lfs-net.service /etc/systemd/system/docker.service.d/omp-lfs-net.conf
-  install -D -m 644 /etc/omp-layerfs/net.env /etc/layerfs-bridge/net.env && rm -rf /etc/omp-layerfs
-  . /etc/layerfs-bridge/net.env
+  install -D -m 644 /etc/omp-layerfs/net.env /etc/layerfs-wsl/net.env && rm -rf /etc/omp-layerfs
+  . /etc/layerfs-wsl/net.env
   if [ "$(cat "/sys/class/net/$LFS_BRIDGE/ifalias" 2>/dev/null)" = "omp-lfs $LFS_ID" ]; then
     ip link set "$LFS_BRIDGE" alias "lfsb $LFS_ID"
   fi
   echo "network of the omp-layerfs install carried over: $LFS_BRIDGE $LFS_SUBNET"
-elif [ -f /etc/layerfs-bridge/net.env ]; then
-  echo "kept: $(tr '\n' ' ' < /etc/layerfs-bridge/net.env)"
+elif [ -f /etc/layerfs-wsl/net.env ]; then
+  echo "kept: $(tr '\n' ' ' < /etc/layerfs-wsl/net.env)"
 elif [ -e /etc/docker/daemon.json ]; then
   die "/etc/docker/daemon.json exists and was not written by this script; refusing to change a Docker setup it does not own (use a distro of its own)"
 elif [ -d /var/lib/docker/network ]; then
   # an install from before lfs-net.sh, on docker0; moving it would change the bridge under its Sandboxes
   echo "this distro's dockerd already runs on docker0 (an older install); left as it is"
 else
-  read -r bridge subnet id < <(/opt/layerfs-bridge/lfs-net.sh pick)
-  install -D -m 644 /dev/stdin /etc/layerfs-bridge/net.env <<<"LFS_BRIDGE=$bridge
+  read -r bridge subnet id < <(/opt/layerfs-wsl/lfs-net.sh pick)
+  install -D -m 644 /dev/stdin /etc/layerfs-wsl/net.env <<<"LFS_BRIDGE=$bridge
 LFS_SUBNET=$subnet
 LFS_ID=$id"
   install -D -m 644 /dev/stdin /etc/docker/daemon.json <<<"{\"bridge\": \"$bridge\", \"iptables\": false, \"ip6tables\": false}"
   echo "bridge $bridge, subnet $subnet"
 fi
-if [ -f /etc/layerfs-bridge/net.env ]; then
+if [ -f /etc/layerfs-wsl/net.env ]; then
   cat > /etc/systemd/system/lfsb-net.service <<'EOF'
 [Unit]
-Description=layerfs-bridge container network (bridge, forwarding, NAT)
+Description=layerfs-wsl container network (bridge, forwarding, NAT)
 Before=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/opt/layerfs-bridge/lfs-net.sh up
-ExecStop=/opt/layerfs-bridge/lfs-net.sh down
+ExecStart=/opt/layerfs-wsl/lfs-net.sh up
+ExecStop=/opt/layerfs-wsl/lfs-net.sh down
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -153,12 +158,28 @@ else
 fi
 
 step "bridge, page and fixture"
-mkdir -p /opt/layerfs-bridge "$ROOT/ui" "$ROOT/scripts" "$ROOT/traces" "$ROOT/fixtures"
-tr -d '\r' < "$REPO/bridge/lfs-bridge.sh" > /opt/layerfs-bridge/lfs-bridge.sh.new
-chmod 755 /opt/layerfs-bridge/lfs-bridge.sh.new && mv /opt/layerfs-bridge/lfs-bridge.sh.new /opt/layerfs-bridge/lfs-bridge.sh
+# an install under the name layerfs-bridge: its state folder moves here and its command goes
+if [ -d /root/layerfs-bridge ]; then
+  [ ! -e "$ROOT" ] || die "both /root/layerfs-bridge and $ROOT exist; merge them by hand and run this again"
+  mv /root/layerfs-bridge "$ROOT" && echo "/root/layerfs-bridge moved to $ROOT"
+fi
+rm -rf /opt/layerfs-bridge
+mkdir -p /opt/layerfs-wsl "$ROOT/ui" "$ROOT/scripts" "$ROOT/traces" "$ROOT/fixtures"
+tr -d '\r' < "$REPO/bridge/lfs-wsl.sh" > /opt/layerfs-wsl/lfs-wsl.sh.new
+chmod 755 /opt/layerfs-wsl/lfs-wsl.sh.new && mv /opt/layerfs-wsl/lfs-wsl.sh.new /opt/layerfs-wsl/lfs-wsl.sh
 for f in server.mjs page.js index.html; do tr -d '\r' < "$REPO/ui/$f" > "$ROOT/ui/$f"; done
 [ -e "$ROOT/fixtures/hello" ] || { cp -r "$REPO/fixtures/hello" "$ROOT/fixtures/hello"; find "$ROOT/fixtures/hello" -type f -exec sed -i 's/\r$//' {} +; }
-echo "bridge /opt/layerfs-bridge/lfs-bridge.sh, page $ROOT/ui, fixture $ROOT/fixtures/hello"
+echo "bridge /opt/layerfs-wsl/lfs-wsl.sh, page $ROOT/ui, fixture $ROOT/fixtures/hello"
+# existing clients are brought up to this command (idempotent): one made by an older one (for
+# example under the layerfs-bridge name, with its state folder) is made again, and a project that
+# had a page gets it back; `up` refuses while that project's Sandboxes still run
+for p in $(docker ps -a --filter label=lfsb.project --format '{{.Label "lfsb.project"}}'); do
+  id=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "lfsb-$p" | sed -n 's/^LAYERFS_IMAGE=//p')
+  tag=$(docker image inspect --format '{{join .RepoTags "\n"}}' "$id" 2>/dev/null | grep -m1 '^lfsb-' || true)
+  [ -n "$tag" ] || { echo "$p: no lfsb-* tag for its image $id; run: lfs-wsl.sh up $p <image>"; continue; }
+  /opt/layerfs-wsl/lfs-wsl.sh up "$p" "$tag" </dev/null
+  if awk -v p="$p" '$1 == p { f = 1 } END { exit !f }' "$ROOT/ui-ports" 2>/dev/null; then /opt/layerfs-wsl/lfs-wsl.sh ui "$p" </dev/null; fi
+done
 
 # an install of this project under its old name (omp-layerfs): its projects move to the new names
 if [ -x /opt/omp-layerfs/lfs-bridge.sh ]; then
@@ -188,6 +209,6 @@ if ! image "$NODE_IMAGE"; then
 fi
 
 step "check"
-/opt/layerfs-bridge/lfs-bridge.sh projects
+/opt/layerfs-wsl/lfs-wsl.sh projects
 echo
-echo "layerfs-bridge is set up in this distro."
+echo "layerfs-wsl is set up in this distro."

@@ -1,6 +1,6 @@
 # Other agent harnesses
 
-The bridge is a plain command, so any agent that can run a shell command on Windows can
+`lfs-wsl.sh` is a plain command, so any agent that can run a shell command on Windows can
 work on a LayerFS project the way the OMP extension's tools do. Below is the instruction
 file Claude Code (2.1.287, `claude-sonnet-5-5`) was given; with it, a non-interactive run
 forked a Branch of `hello`, added a function and a test, ran `cargo test` in a Workspace
@@ -13,7 +13,7 @@ Run it from a folder outside any git repository, with the file below as that fol
 
 ```bash
 claude -p "$(<task.txt)" --permission-mode dontAsk --allowedTools Bash Read Write Edit Glob Grep \
-  --add-dir '\\wsl.localhost\layerfs-lab\root\layerfs-bridge\scripts' --max-turns 60 < /dev/null
+  --add-dir '\\wsl.localhost\layerfs-lab\root\layerfs-wsl\scripts' --max-turns 60 < /dev/null
 ```
 
 What the OMP extension does that such a harness has to be told, or does without:
@@ -23,9 +23,9 @@ What the OMP extension does that such a harness has to be told, or does without:
 - **Approvals.** The extension grades `layerfs` calls read / write / exec; a harness sees
   only its own shell permission.
 - **Project context and call records.** No project line in the system prompt, no
-  `layerfs-bridge.call` records, no `/layerfs log|agents`; the trace files still have every
+  `layerfs-wsl.call` records, no `/layerfs log|agents`; the trace files still have every
   call, and the page reads them.
-- **Argument passing.** Call the bridge with `wsl.exe -d layerfs-lab -u root --exec ...`, which
+- **Argument passing.** Call `lfs-wsl.sh` with `wsl.exe -d layerfs-lab -u root --exec ...`, which
   hands it the arguments as they are. `wsl.exe ... -- ...` runs them through the distro's
   shell first, which expands `$PWD` and other `$` words in a `run` command to the distro
   side's values (Claude's first run got `/mnt/e/tmp/cc-harness` for `$PWD`). Git Bash also
@@ -39,9 +39,9 @@ Replace `<project>` and `<session>` (letters, digits, `_`, `-`).
 # Working on the LayerFS project `<project>`
 
 The code you work on is NOT in this folder. It is the project `<project>` stored in
-LayerFS, inside the WSL distro `layerfs-lab`. Reach it only through the bridge:
+LayerFS, inside the WSL distro `layerfs-lab`. Reach it only through the `lfs-wsl.sh` command:
 
-    MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh <subcommand> ...
+    MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -u root --exec /opt/layerfs-wsl/lfs-wsl.sh <subcommand> ...
 
 Always keep the `MSYS_NO_PATHCONV=1` prefix and `--exec`: your Bash is Git Bash, which
 otherwise rewrites Linux paths such as `/opt/...` or `/src/lib.rs` into Windows paths, and
@@ -51,11 +51,11 @@ without `--exec` the distro's shell would expand `$` words in your arguments.
 
 - Project: `<project>`
 - Trace id: `<project>.<session>`: use exactly this on every call. Every call is
-  recorded under it in `/root/layerfs-bridge/traces/<project>.<session>.jsonl`.
+  recorded under it in `/root/layerfs-wsl/traces/<project>.<session>.jsonl`.
 
 ## CLI: one command per call
 
-    MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh cli <project> <project>.<session> -- <args>
+    MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -u root --exec /opt/layerfs-wsl/lfs-wsl.sh cli <project> <project>.<session> -- <args>
 
 `<args>` is one of:
 
@@ -77,7 +77,7 @@ exits 2: read it before you retry; never resend the same call blindly.
 
 `write` reads the file from stdin, e.g.
 
-    cat new_lib.rs | MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh cli <project> <project>.<session> -- write my-branch /src/lib.rs "add foo"
+    cat new_lib.rs | MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -u root --exec /opt/layerfs-wsl/lfs-wsl.sh cli <project> <project>.<session> -- write my-branch /src/lib.rs "add foo"
 
 ## Rules
 
@@ -95,11 +95,11 @@ exits 2: read it before you retry; never resend the same call blindly.
 
 The CLI has no merge. For that, write a Node ES module and run it:
 
-1. Create it at `\\wsl.localhost\layerfs-lab\root\layerfs-bridge\scripts\<session>-<name>.mjs`
-   (Linux path `/root/layerfs-bridge/scripts/<session>-<name>.mjs`).
+1. Create it at `\\wsl.localhost\layerfs-lab\root\layerfs-wsl\scripts\<session>-<name>.mjs`
+   (Linux path `/root/layerfs-wsl/scripts/<session>-<name>.mjs`).
 2. Run it:
 
-       MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -u root --exec /opt/layerfs-bridge/lfs-bridge.sh script <project> <project>.<session> /root/layerfs-bridge/scripts/<session>-<name>.mjs
+       MSYS_NO_PATHCONV=1 wsl.exe -d layerfs-lab -u root --exec /opt/layerfs-wsl/lfs-wsl.sh script <project> <project>.<session> /root/layerfs-wsl/scripts/<session>-<name>.mjs
 
 Template:
 
