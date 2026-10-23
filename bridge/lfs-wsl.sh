@@ -30,8 +30,9 @@
 # LFSB_CHECKOUT (that commit's checkout: SDK JS, operator, lfs.js, SKILL.md); `up`
 # refuses a bundle whose COMMIT is not the checkout's HEAD. The page: LFSB_UI_CHECKOUT,
 # whose DSH host and view/model code ui/server.mjs loads (it runs on the core's SDK).
-# A client is made for one core and page checkout (LFSB_CORE in its environment);
-# under other ones, `up` recreates it and the other subcommands refuse it.
+# A client is made for one core (the bundle's commit and these paths) and page checkout
+# (LFSB_CORE in its environment); under other ones, `up` recreates it and the other
+# subcommands refuse it.
 set -euo pipefail
 
 BUNDLE=${LFSB_BUNDLE:-/root/layerfs-next-bundle}
@@ -43,7 +44,7 @@ SDK=file://$LAYERFS/sdk/js/src/index.js
 OPERATOR=file://$LAYERFS/sdk/js/operator/index.js
 CLI=$LAYERFS/dsh/packages/host/src/lfs.js
 SKILL=$LAYERFS/.agents/skills/layerfs-js-sdk/SKILL.md
-CORE="$BUNDLE $LAYERFS $UI_LAYERFS $ROOT"
+CORE="$BUNDLE@$(tr -d ' \n' < "$BUNDLE/COMMIT" 2>/dev/null || echo -) $LAYERFS $UI_LAYERFS $ROOT"
 
 die() { echo "lfs-wsl: $*" >&2; exit 64; }
 usage() { sed -n '12,24p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }

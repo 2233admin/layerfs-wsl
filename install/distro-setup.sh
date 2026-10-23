@@ -11,13 +11,11 @@
 # lfs-wsl.sh's and the extension's defaults.
 set -euo pipefail
 
-CORE_REV=e49d1613f075c1e945d85adb8853fbfe9e7be7eb   # core and SDK (upstream 2e5061798 + PR #409)
+CORE_REV=1aa56ece78e2ecd71b46cf07076100345df47239   # core and SDK (upstream main, includes PR #409)
 UI_REV=5fb68ddc1acc3163e3ac3486133bde014c5fbed3     # the page's DSH host and view code
 UPSTREAM=https://github.com/Ephemeral-AI-Lab/layerfs.git
-FORK=https://github.com/2233admin/layerfs.git        # holds CORE_REV until #409 is merged
-FORK_BRANCH=fix/merge-binding-kind
-BUNDLE_URL=https://github.com/2233admin/layerfs-wsl/releases/download/core-e49d1613f/layerfs-bundle-e49d1613f.tar.gz
-BUNDLE_SHA256=c0b46bf01f082e8ab973e61eb04c786c43d889460c0a656105ad4553f73519ee
+BUNDLE_URL=https://github.com/2233admin/layerfs-wsl/releases/download/core-1aa56ece7/layerfs-bundle-1aa56ece7.tar.gz
+BUNDLE_SHA256=bdb54a6a94e780eb5892c83289f18d60612accff43ec4998a7ceb99cc639dcba
 
 SRC=/root/layerfs-upstream CORE=/root/layerfs-next BUNDLE=/root/layerfs-next-bundle UI=/root/layerfs
 ROOT=/root/layerfs-wsl RUNTIME_IMAGE=layerfs-352-runtime:node24
@@ -129,13 +127,45 @@ api=$(docker version --format '{{.Server.APIVersion}}')
 docker version --format 'docker engine {{.Server.Version}}, API {{.Server.APIVersion}}'
 [ "$(printf '%s\n1.54\n' "$api" | sort -V | head -1)" = 1.54 ] || die "Docker API $api: the LayerFS core needs 1.54 or later"
 
+# Clients made for another core or other paths than this install's (an older core, or the name
+# layerfs-bridge, whose state folder moves below) are made again for them. Before anything
+# changes: none of their projects may have a running Sandbox, and the pages that answer now are
+# noted, to be started again (a port in ui-ports alone does not mean the page runs). The clients
+# are removed before the checkout and bundle change under them (their Store volumes stay); the
+# list is kept in $PENDING until they are up again, so a run that stops midway resumes them.
+step "clients made for another core"
+want="$BUNDLE@$CORE_REV $CORE $UI $ROOT" old_root=$ROOT
+PENDING=/var/lib/layerfs-wsl/pending-clients
+[ ! -d /root/layerfs-bridge ] || old_root=/root/layerfs-bridge
+mkdir -p "$(dirname "$PENDING")" && touch "$PENDING"
+for p in $(docker ps -a --filter label=lfsb.project --format '{{.Label "lfsb.project"}}'); do
+  have=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "lfsb-$p" | sed -n 's/^LFSB_CORE=//p')
+  [ "$have" != "$want" ] || continue
+  busy=$(docker ps --filter "volume=lfsb-$p-store" --format '{{.Names}}' | grep -vx "lfsb-$p" || true)
+  [ -z "$busy" ] || die "$p: Sandboxes still run ($(echo $busy)); unmount their Workspaces, wait two minutes and run this again"
+  id=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "lfsb-$p" | sed -n 's/^LAYERFS_IMAGE=//p')
+  tag=$(docker image inspect --format '{{join .RepoTags "\n"}}' "$id" 2>/dev/null | grep -m1 '^lfsb-' || true)
+  [ -n "$tag" ] || die "$p: its Sandbox image $id has no lfsb-* tag; tag it (docker tag $id lfsb-<kind>-sandbox:<n>) and run this again"
+  page=0 port=$(awk -v p="$p" '$1 == p { print $2; exit }' "$old_root/ui-ports" 2>/dev/null || true)
+  if [ -n "$port" ] && curl -fsS -m 2 "http://127.0.0.1:$port/bridge/whoami" 2>/dev/null | grep -q "\"project\":\"$p\""; then page=1; fi
+  awk -v p="$p" '$1 == p { f = 1 } END { exit !f }' "$PENDING" || echo "$p $tag $page" >> "$PENDING"
+done
+while read -r p tag page; do
+  if docker inspect "lfsb-$p" >/dev/null 2>&1; then
+    docker rm -f "lfsb-$p" >/dev/null && echo "client lfsb-$p removed, to be made again ($tag)"
+  fi
+done < "$PENDING"
+
 step "LayerFS checkouts"
 [ -d "$SRC/.git" ] || git clone --quiet "$UPSTREAM" "$SRC"
-git -C "$SRC" cat-file -e "$CORE_REV^{commit}" 2>/dev/null || git -C "$SRC" fetch --quiet "$FORK" "$FORK_BRANCH"
+git -C "$SRC" cat-file -e "$CORE_REV^{commit}" 2>/dev/null || git -C "$SRC" fetch --quiet origin
 git -C "$SRC" cat-file -e "$UI_REV^{commit}" 2>/dev/null || git -C "$SRC" fetch --quiet origin
-checkout() { # checkout <dir> <rev>: a detached worktree of $SRC at <rev>
+checkout() { # checkout <dir> <rev>: a detached worktree of $SRC at <rev>; a clean one is moved to <rev>
   [ -e "$1" ] || git -C "$SRC" worktree add --quiet --detach "$1" "$2"
-  [ "$(git -C "$1" rev-parse HEAD)" = "$2" ] || die "$1 exists but is not at $2; move it away and run this again"
+  if [ "$(git -C "$1" rev-parse HEAD)" != "$2" ]; then
+    [ -z "$(git -C "$1" status --porcelain)" ] || die "$1 has local changes and is not at $2; move it away and run this again"
+    git -C "$1" checkout --quiet --detach "$2"
+  fi
   echo "$1 at $2"
 }
 checkout "$CORE" "$CORE_REV"
@@ -158,24 +188,7 @@ else
 fi
 
 step "bridge, page and fixture"
-# Clients made for other paths than this install's (for example under the name layerfs-bridge,
-# whose state folder moves below) are made again for them. Before anything moves: none of their
-# projects may have a running Sandbox (`up` would refuse midway), and the pages that answer now
-# are noted, to be started again (a port in ui-ports alone does not mean the page runs).
-want="$BUNDLE $CORE $UI $ROOT" old_root=$ROOT stale="" pages=""
-[ ! -d /root/layerfs-bridge ] || old_root=/root/layerfs-bridge
-for p in $(docker ps -a --filter label=lfsb.project --format '{{.Label "lfsb.project"}}'); do
-  have=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "lfsb-$p" | sed -n 's/^LFSB_CORE=//p')
-  [ "$have" != "$want" ] || continue
-  busy=$(docker ps --filter "volume=lfsb-$p-store" --format '{{.Names}}' | grep -vx "lfsb-$p" || true)
-  [ -z "$busy" ] || die "$p: Sandboxes still run ($(echo $busy)); unmount their Workspaces, wait two minutes and run this again"
-  id=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "lfsb-$p" | sed -n 's/^LAYERFS_IMAGE=//p')
-  tag=$(docker image inspect --format '{{join .RepoTags "\n"}}' "$id" 2>/dev/null | grep -m1 '^lfsb-' || true)
-  [ -n "$tag" ] || die "$p: its Sandbox image $id has no lfsb-* tag; tag it (docker tag $id lfsb-<kind>-sandbox:<n>) and run this again"
-  stale="$stale $p=$tag"
-  port=$(awk -v p="$p" '$1 == p { print $2; exit }' "$old_root/ui-ports" 2>/dev/null || true)
-  if [ -n "$port" ] && curl -fsS -m 2 "http://127.0.0.1:$port/bridge/whoami" 2>/dev/null | grep -q "\"project\":\"$p\""; then pages="$pages $p"; fi
-done
+# (the clients this install remakes were noted and removed in "clients made for another core")
 if [ -d /root/layerfs-bridge ]; then
   [ ! -e "$ROOT" ] || die "both /root/layerfs-bridge and $ROOT exist; merge them by hand and run this again"
   mv /root/layerfs-bridge "$ROOT" && echo "/root/layerfs-bridge moved to $ROOT"
@@ -187,11 +200,11 @@ chmod 755 /opt/layerfs-wsl/lfs-wsl.sh.new && mv /opt/layerfs-wsl/lfs-wsl.sh.new 
 for f in server.mjs page.js index.html; do tr -d '\r' < "$REPO/ui/$f" > "$ROOT/ui/$f"; done
 [ -e "$ROOT/fixtures/hello" ] || { cp -r "$REPO/fixtures/hello" "$ROOT/fixtures/hello"; find "$ROOT/fixtures/hello" -type f -exec sed -i 's/\r$//' {} +; }
 echo "command /opt/layerfs-wsl/lfs-wsl.sh, page $ROOT/ui, fixture $ROOT/fixtures/hello"
-for pt in $stale; do
-  p=${pt%%=*} tag=${pt#*=}
+while read -r p tag page; do
   /opt/layerfs-wsl/lfs-wsl.sh up "$p" "$tag" </dev/null
-  case " $pages " in *" $p "*) /opt/layerfs-wsl/lfs-wsl.sh ui "$p" </dev/null ;; esac
-done
+  [ "$page" = 0 ] || /opt/layerfs-wsl/lfs-wsl.sh ui "$p" </dev/null
+  awk -v p="$p" '$1 != p' "$PENDING" > "$PENDING.new" && mv "$PENDING.new" "$PENDING"
+done < <(cat "$PENDING")
 
 # an install of this project under its old name (omp-layerfs): its projects move to the new names
 if [ -x /opt/omp-layerfs/lfs-bridge.sh ]; then

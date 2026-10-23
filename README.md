@@ -29,11 +29,13 @@ Windows only starts that process and reads its output.
 
 Two LayerFS versions are in use, each pinned:
 
-- **Core and SDK: `e49d1613f`**, upstream `2e5061798` plus the merge fix of upstream
-  [PR #409](https://github.com/Ephemeral-AI-Lab/layerfs/pull/409) (branch
-  `fix/merge-binding-kind` of `2233admin/layerfs`). The daemon and native addon come from the
-  bundle `/root/layerfs-next-bundle`, the SDK, operator, `lfs.js` CLI and SDK guide from the
-  checkout `/root/layerfs-next`. Once #409 is merged upstream, move both to an upstream commit.
+- **Core and SDK: `1aa56ece7`**, upstream main (it includes the merge fix of
+  [PR #409](https://github.com/Ephemeral-AI-Lab/layerfs/pull/409)). The daemon and native
+  addon come from the bundle `/root/layerfs-next-bundle`, the SDK, operator, `lfs.js` CLI and
+  SDK guide from the checkout `/root/layerfs-next`. Running `install/distro-setup.sh` of a
+  newer layerfs-wsl moves an install to its core in place: the clients are removed first
+  (their Stores stay; refused while a Sandbox runs), then made again on the new core, and the
+  pages that were running are started again on their ports.
 - **The page's DSH code: `5fb68dd`** (`/root/layerfs`). The page runs DSH's host modules
   (`route.js`, `Collector`, `TreeReader`) and view/model code unbuilt from that checkout, so
   it stays on the commit it was written against; it draws what the newer core writes.
@@ -55,7 +57,7 @@ powershell -ExecutionPolicy Bypass -File install\install.ps1
 2. runs `install/distro-setup.sh` in it as root: Docker (the distro's own dockerd, on its own
    container network, below), LayerFS cloned to `/root/layerfs-upstream` with the two pinned
    worktrees, the core bundle from this repository's release
-   [`core-e49d1613f`](https://github.com/2233admin/layerfs-wsl/releases/tag/core-e49d1613f)
+   [`core-1aa56ece7`](https://github.com/2233admin/layerfs-wsl/releases/tag/core-1aa56ece7)
    (sha256-checked; `-FromSource` builds it instead with `bridge/build-bundle.sh`, a release
    cargo build of tens of minutes), the client image, both Sandbox images, `lfs-wsl.sh`, the
    page and the `hello` fixture;
@@ -134,8 +136,8 @@ image `layerfs-352-runtime:node24` (built from the core checkout's
 
 `up` and `init` refuse a bundle whose `COMMIT` is not the checkout's `HEAD` (a bundle
 without `COMMIT` is taken only with `LFSB_CHECKOUT=/root/layerfs`). Each client records
-these three paths and the state folder `LFSB_ROOT` (default `/root/layerfs-wsl`) as
-`LFSB_CORE`; `up` recreates a client made for others (refused while its Sandboxes run), and
+the bundle's commit, these three paths and the state folder `LFSB_ROOT` (default
+`/root/layerfs-wsl`) as `LFSB_CORE`; `up` recreates a client made for others (refused while its Sandboxes run), and
 `cli`, `script`, `export`, `ui` and `rotate` refuse such a client until `up` has run.
 `LFSB_RUNTIME_IMAGE` overrides the client image.
 
