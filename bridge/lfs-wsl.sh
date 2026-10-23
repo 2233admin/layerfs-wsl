@@ -44,7 +44,9 @@ SDK=file://$LAYERFS/sdk/js/src/index.js
 OPERATOR=file://$LAYERFS/sdk/js/operator/index.js
 CLI=$LAYERFS/dsh/packages/host/src/lfs.js
 SKILL=$LAYERFS/.agents/skills/layerfs-js-sdk/SKILL.md
-CORE="$BUNDLE@$(tr -d ' \n' < "$BUNDLE/COMMIT" 2>/dev/null || echo -) $LAYERFS $UI_LAYERFS $ROOT"
+CORE_COMMIT=-
+[ ! -f "$BUNDLE/COMMIT" ] || CORE_COMMIT=$(tr -d ' \n' < "$BUNDLE/COMMIT")
+CORE="$BUNDLE@$CORE_COMMIT $LAYERFS $UI_LAYERFS $ROOT"
 
 die() { echo "lfs-wsl: $*" >&2; exit 64; }
 usage() { sed -n '12,24p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
